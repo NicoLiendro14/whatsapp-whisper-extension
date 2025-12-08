@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Transcriber</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      width: 320px;
+      padding: 20px;
+      background: linear-gradient(135deg, #075e54 0%, #128c7e 100%);
+      color: #fff;
+    }
+    
+    .container {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      padding: 20px;
+      color: #333;
+    }
+    
+    h1 {
+      font-size: 16px;
+      margin-bottom: 6px;
+      color: #075e54;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    h1::before {
+      content: "🎙️";
+    }
+    
+    .subtitle {
+      font-size: 12px;
+      color: #667;
+      margin-bottom: 16px;
+    }
+    
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #444;
+    }
+    
+    input[type="password"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      font-size: 13px;
+      transition: border-color 0.2s;
+    }
+    
+    input[type="password"]:focus {
+      outline: none;
+      border-color: #25d366;
+    }
+    
+    button {
+      width: 100%;
+      margin-top: 12px;
+      padding: 10px 16px;
+      background: #25d366;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    
+    button:hover {
+      background: #128c7e;
+    }
+    
+    button:active {
+      transform: scale(0.98);
+    }
+    
+    .status {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      text-align: center;
+      display: none;
+    }
+    
+    .status.success {
+      display: block;
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .status.error {
+      display: block;
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .status.info {
+      display: block;
+      background: #e7f3ff;
+      color: #004085;
+      border: 1px solid #b8daff;
+    }
+    
+    .help {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
+      font-size: 11px;
+      color: #888;
+    }
+    
+    .help a {
+      color: #075e54;
+      text-decoration: none;
+    }
+    
+    .help a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>WhatsApp Transcriber</h1>
+    <p class="subtitle">Voice message transcription</p>
+    
+    <label for="apiKey">OpenAI API Key</label>
+    <input 
+      type="password" 
+      id="apiKey" 
+      placeholder="sk-..." 
+      autocomplete="off"
+    >
+    
+    <button id="saveBtn">Save API Key</button>
+    
+    <div id="status" class="status"></div>
+    
+    <div class="help">
+      <p>Don't have an API Key? 
+        <a href="https://platform.openai.com/api-keys" target="_blank">
+          Get one here →
+        </a>
+      </p>
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
