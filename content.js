@@ -21,6 +21,7 @@
   // ========== OUTGOING AUDIO TRANSCRIPTION STATE ==========
   let recordingScanInterval = null;
   let currentTranscriptionPanel = null;
+  let isTranscribing = false;
 
   // ========== DIAGNOSTIC SYSTEM ==========
   const diagnosticLog = [];
@@ -666,20 +667,32 @@
   }
 
   function scanForRecordingBar() {
+    // Don't interfere while a transcription is in progress
+    if (isTranscribing) return;
+
     const pauseBtn = findPauseButton();
     const resumeBtn = findResumeButton();
     const isRecording = !!(pauseBtn || resumeBtn);
 
     if (isRecording) {
-      // Only inject if not already present
-      if (!document.querySelector('.wt-recording-transcribe-btn')) {
+      const recordingContainer = document.querySelector('._ak1r');
+      // Remove any orphan or stale (disabled) transcribe buttons
+      document.querySelectorAll('.wt-recording-transcribe-btn').forEach(btn => {
+        const isInsideRecording = recordingContainer?.contains(btn);
+        const innerBtn = btn.querySelector('button');
+        const isStale = innerBtn?.classList.contains('success') || innerBtn?.classList.contains('error');
+        if (!isInsideRecording || isStale) btn.remove();
+      });
+      // Inject fresh button if none exists inside the recording bar
+      if (!recordingContainer?.querySelector('.wt-recording-transcribe-btn')) {
         injectTranscribeInRecordingBar(pauseBtn, resumeBtn);
       }
     } else {
-      // Recording bar gone — cleanup
+      // Recording bar gone — full cleanup
       if (currentTranscriptionPanel) {
         removeTranscriptionPanel();
       }
+      removeTranscribeButton();
     }
   }
 
@@ -737,6 +750,7 @@
   }
 
   async function handleRecordingTranscribe(button) {
+    isTranscribing = true;
     try {
       button.disabled = true;
       button.querySelector('.wt-rec-btn-icon').textContent = '⏳';
@@ -811,6 +825,8 @@
         button.disabled = false;
         button.classList.remove('error');
       }, 3000);
+    } finally {
+      isTranscribing = false;
     }
   }
 
@@ -885,20 +901,26 @@
       panel.remove();
     }
     currentTranscriptionPanel = null;
+    removeTranscribeButton();
+  }
+
+  function removeTranscribeButton() {
+    if (isTranscribing) return;
+    document.querySelectorAll('.wt-recording-transcribe-btn').forEach(btn => btn.remove());
   }
 
   function handleSendAsText(text) {
-    // 1. Click Cancel to delete the audio recording
     const cancelBtn = findRecordingCancelButton();
 
-    // Remove our panel first
+    // Remove all injected UI before React reconciles the DOM transition
     removeTranscriptionPanel();
+    removeTranscribeButton();
 
     if (cancelBtn) {
       cancelBtn.click();
     }
 
-    // 2. Wait for the recording bar to disappear and the text input to become available
+    // Wait for the recording bar to disappear and the text input to become available
     setTimeout(() => {
       pasteTextInInput(text);
     }, 400);

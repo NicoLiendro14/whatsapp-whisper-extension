@@ -288,14 +288,14 @@ body[class*="dark"] .wt-transcribe-btn.error {
 /* ========== OUTGOING AUDIO — Transcription Panel ========== */
 
 .wt-recording-panel {
-  padding: 10px 14px;
+  padding: 8px 12px;
   margin: 0 8px 4px 8px;
   background: #f0f2f5;
   border: 1px solid #d1d7db;
   border-left: 3px solid #128c7e;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  max-width: 100%;
+  max-width: 450px;
   box-sizing: border-box;
   animation: wtSlideUp 0.2s ease-out;
 }
@@ -320,9 +320,9 @@ body[class*="dark"] .wt-transcribe-btn.error {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 6px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  margin-bottom: 2px;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .wt-rec-panel-icon {
@@ -364,14 +364,15 @@ body[class*="dark"] .wt-transcribe-btn.error {
 }
 
 .wt-rec-panel-text {
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13.5px;
+  line-height: 1.4;
   color: #111b21;
   white-space: pre-wrap;
   word-break: break-word;
-  margin-bottom: 8px;
-  max-height: 120px;
+  margin-bottom: 6px;
+  max-height: 40vh;
   overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .wt-rec-panel-actions {
@@ -384,8 +385,8 @@ body[class*="dark"] .wt-transcribe-btn.error {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 4px 10px;
+  font-size: 12px;
   font-weight: 500;
   font-family: inherit;
   border-radius: 18px;
