@@ -14,6 +14,7 @@ const EXTENSION_FILES = [
   'background.js',
   'content.js',
   'injected.js',
+  'injected-early.js',
   'popup.html',
   'popup.js',
   'styles.css',

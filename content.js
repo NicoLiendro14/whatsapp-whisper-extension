@@ -18,6 +18,10 @@
   let scanningStarted = false;
   let isScanning = false;
 
+  // ========== OUTGOING AUDIO TRANSCRIPTION STATE ==========
+  let recordingScanInterval = null;
+  let currentTranscriptionPanel = null;
+
   // ========== DIAGNOSTIC SYSTEM ==========
   const diagnosticLog = [];
   const MAX_LOG_ENTRIES = 100;
@@ -125,6 +129,31 @@
     }
   });
 
+  // ========== EARLY PATCH MESSAGE LISTENER (getUserMedia interceptor) ==========
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    const msg = event.data;
+    if (!msg || msg.source !== 'wt-early-patch') return;
+
+    if (msg.action === 'recorderStarted') {
+      diagLog('info', 'recording', 'Parallel recorder started — mic stream captured');
+    }
+
+    if (msg.action === 'recorderStopped') {
+      diagLog('info', 'recording', 'Parallel recorder stopped');
+      removeTranscriptionPanel();
+    }
+
+    // Handle responses (capturedAudioResult, stopResult)
+    if (msg.requestId) {
+      const resolver = pendingRequests.get(msg.requestId);
+      if (resolver) {
+        pendingRequests.delete(msg.requestId);
+        resolver(msg);
+      }
+    }
+  });
+
   function sendToInjectedScript(action, data = {}) {
     return new Promise((resolve, reject) => {
       const requestId = ++requestIdCounter;
@@ -132,6 +161,29 @@
       const timeout = setTimeout(() => {
         pendingRequests.delete(requestId);
         reject(new Error('Timeout waiting for injected script response'));
+      }, 30000);
+
+      pendingRequests.set(requestId, (response) => {
+        clearTimeout(timeout);
+        resolve(response);
+      });
+
+      window.postMessage({
+        source: 'wt-content-script',
+        action,
+        requestId,
+        ...data
+      }, '*');
+    });
+  }
+
+  function sendToEarlyPatch(action, data = {}) {
+    return new Promise((resolve, reject) => {
+      const requestId = ++requestIdCounter;
+
+      const timeout = setTimeout(() => {
+        pendingRequests.delete(requestId);
+        reject(new Error('Timeout waiting for audio capture'));
       }, 30000);
 
       pendingRequests.set(requestId, (response) => {
@@ -526,6 +578,366 @@
     return div.innerHTML;
   }
 
+  // ========== OUTGOING AUDIO TRANSCRIPTION ==========
+  // Intercepts voice recording to offer "Send as Text" option
+
+  const RECORDING_SCAN_INTERVAL = 500;
+
+  // Multi-language pause/resume selectors
+  const PAUSE_BTN_SELECTORS = [
+    'button[aria-label="Pause recording"]',
+    'button[aria-label="Pausar grabación"]',
+    'button[aria-label="Pausar gravação"]',
+    'button[aria-label="Mettre en pause l\'enregistrement"]',
+    'button[aria-label="Aufnahme pausieren"]',
+    'button[aria-label="Metti in pausa la registrazione"]',
+    'button[aria-label="Приостановить запись"]',
+    'button[aria-label="إيقاف التسجيل مؤقتًا"]',
+    'button[aria-label="録音を一時停止"]',
+    'button[aria-label="暂停录音"]',
+    'button[aria-label="녹음 일시중지"]',
+  ];
+
+  const RESUME_BTN_SELECTORS = [
+    'button[aria-label="Resume recording"]',
+    'button[aria-label="Reanudar grabación"]',
+    'button[aria-label="Retomar gravação"]',
+    'button[aria-label="Reprendre l\'enregistrement"]',
+    'button[aria-label="Aufnahme fortsetzen"]',
+    'button[aria-label="Riprendi la registrazione"]',
+    'button[aria-label="Возобновить запись"]',
+    'button[aria-label="استئناف التسجيل"]',
+    'button[aria-label="録音を再開"]',
+    'button[aria-label="继续录音"]',
+    'button[aria-label="녹음 재개"]',
+  ];
+
+  const CANCEL_BTN_LABELS = [
+    'Cancel', 'Cancelar', 'Annuler', 'Abbrechen', 'Annulla', 'Отмена',
+    'إلغاء', 'キャンセル', '取消', '취소',
+  ];
+
+  // Language-independent: find a button by its SVG icon title
+  function findButtonBySvgTitle(svgTitleText, container) {
+    const root = container || document;
+    const titles = root.querySelectorAll('svg > title');
+    for (const titleEl of titles) {
+      if (titleEl.textContent === svgTitleText) {
+        const btn = titleEl.closest('button');
+        if (btn) return btn;
+      }
+    }
+    return null;
+  }
+
+  function findPauseButton() {
+    // SVG title first (language-independent)
+    let btn = findButtonBySvgTitle('ic-pause-circle');
+    if (btn) return btn;
+    for (const sel of PAUSE_BTN_SELECTORS) {
+      btn = document.querySelector(sel);
+      if (btn) return btn;
+    }
+    return null;
+  }
+
+  function findResumeButton() {
+    let btn = findButtonBySvgTitle('ic-keyboard-voice-filled');
+    if (btn) return btn;
+    for (const sel of RESUME_BTN_SELECTORS) {
+      btn = document.querySelector(sel);
+      if (btn) return btn;
+    }
+    return null;
+  }
+
+  function findRecordingCancelButton() {
+    const container = document.querySelector('._ak1r');
+    if (!container) return null;
+    // Try SVG title within the recording container
+    const btn = findButtonBySvgTitle('ic-delete', container);
+    if (btn) return btn;
+    // Fallback: aria-label
+    for (const label of CANCEL_BTN_LABELS) {
+      const el = container.querySelector(`button[aria-label="${label}"]`);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  function scanForRecordingBar() {
+    const pauseBtn = findPauseButton();
+    const resumeBtn = findResumeButton();
+    const isRecording = !!(pauseBtn || resumeBtn);
+
+    if (isRecording) {
+      // Only inject if not already present
+      if (!document.querySelector('.wt-recording-transcribe-btn')) {
+        injectTranscribeInRecordingBar(pauseBtn, resumeBtn);
+      }
+    } else {
+      // Recording bar gone — cleanup
+      if (currentTranscriptionPanel) {
+        removeTranscriptionPanel();
+      }
+    }
+  }
+
+  function injectTranscribeInRecordingBar(pauseBtn, resumeBtn) {
+    const targetBtn = pauseBtn || resumeBtn;
+    if (!targetBtn) return;
+
+    // Navigate the DOM to find the right insertion point
+    // Structure: ._ak1r > div[tabindex="-1"] > div (flex row) > [child divs for each button group]
+    const recordingContainer = document.querySelector('._ak1r');
+    if (!recordingContainer) return;
+
+    const tabindexContainer = recordingContainer.querySelector('[tabindex="-1"]');
+    if (!tabindexContainer) return;
+
+    const flexRow = tabindexContainer.firstElementChild;
+    if (!flexRow) return;
+
+    // Find which direct child of the flex row contains our target button
+    let targetWrapper = null;
+    for (const child of flexRow.children) {
+      if (child.contains(targetBtn)) {
+        targetWrapper = child;
+        break;
+      }
+    }
+    if (!targetWrapper) {
+      diagLog('warn', 'recording', 'Could not find wrapper for pause/resume button');
+      return;
+    }
+
+    // Create our transcribe button (styled to match WhatsApp's recording bar buttons)
+    const btnContainer = document.createElement('div');
+    btnContainer.className = 'wt-recording-transcribe-btn';
+    btnContainer.innerHTML = `
+      <button class="wt-rec-btn-inner" title="Transcribe to Text" aria-label="Transcribe to Text">
+        <span class="wt-rec-btn-icon">📝</span>
+      </button>
+    `;
+
+    // Insert right after the pause/resume wrapper
+    if (targetWrapper.nextSibling) {
+      flexRow.insertBefore(btnContainer, targetWrapper.nextSibling);
+    } else {
+      flexRow.appendChild(btnContainer);
+    }
+
+    btnContainer.querySelector('button').addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleRecordingTranscribe(e.currentTarget);
+    });
+
+    diagLog('info', 'recording', 'Transcribe button injected in recording bar');
+  }
+
+  async function handleRecordingTranscribe(button) {
+    try {
+      button.disabled = true;
+      button.querySelector('.wt-rec-btn-icon').textContent = '⏳';
+      button.classList.add('loading');
+
+      // 1. Pause WhatsApp's recording UI so the user can review
+      const pauseBtn = findPauseButton();
+      if (pauseBtn) {
+        pauseBtn.click();
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+      // 2. Check API key
+      const apiKeyCheck = await sendMessageToBackground({ action: 'checkApiKey' });
+      if (!apiKeyCheck.exists) {
+        throw new Error('API Key not configured. Click the extension icon.');
+      }
+
+      // 3. Get captured audio from our parallel recorder (getUserMedia interceptor)
+      button.querySelector('.wt-rec-btn-icon').textContent = '⏳';
+      diagLog('info', 'recording', 'Requesting captured audio from parallel recorder...');
+      const audioResponse = await sendToEarlyPatch('getCapturedAudio');
+
+      if (!audioResponse.success) {
+        throw new Error(audioResponse.error || 'Could not capture audio');
+      }
+
+      if (!audioResponse.data || audioResponse.data.length === 0) {
+        throw new Error('Captured audio is empty');
+      }
+
+      diagLog('info', 'recording', 'Audio captured from parallel recorder', {
+        size: audioResponse.data.length,
+        blobSize: audioResponse.blobSize,
+        mimeType: audioResponse.mimeType,
+        chunks: audioResponse.chunksCount
+      });
+
+      // 4. Send to Whisper for transcription
+      button.querySelector('.wt-rec-btn-icon').textContent = '⏳';
+      const result = await sendMessageToBackground({
+        action: 'transcribe',
+        audioData: audioResponse.data,
+        mimeType: audioResponse.mimeType || 'audio/webm'
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Transcription failed');
+      }
+
+      // 5. Show transcription panel with options
+      showRecordingTranscriptionPanel(result.text);
+      button.querySelector('.wt-rec-btn-icon').textContent = '✅';
+      button.classList.remove('loading');
+      button.classList.add('success');
+
+      diagLog('info', 'recording', 'Transcription complete', {
+        textLength: result.text.length,
+        preview: result.text.substring(0, 80)
+      });
+
+    } catch (error) {
+      console.error('[WhatsApp Transcriber] Recording transcription error:', error);
+      button.querySelector('.wt-rec-btn-icon').textContent = '❌';
+      button.classList.remove('loading');
+      button.classList.add('error');
+
+      showRecordingTranscriptionPanel('Error: ' + error.message, true);
+
+      setTimeout(() => {
+        button.querySelector('.wt-rec-btn-icon').textContent = '📝';
+        button.disabled = false;
+        button.classList.remove('error');
+      }, 3000);
+    }
+  }
+
+  function showRecordingTranscriptionPanel(text, isError = false) {
+    removeTranscriptionPanel();
+
+    const panel = document.createElement('div');
+    panel.className = 'wt-recording-panel' + (isError ? ' error' : '');
+    panel.id = 'wt-recording-transcription-panel';
+
+    panel.innerHTML = `
+      <div class="wt-rec-panel-header">
+        <span class="wt-rec-panel-icon">${isError ? '⚠️' : '📝'}</span>
+        <span class="wt-rec-panel-title">${isError ? 'Error' : 'Transcription'}</span>
+        <button class="wt-rec-panel-close" title="Close">✕</button>
+      </div>
+      <div class="wt-rec-panel-text">${escapeHtml(text)}</div>
+      ${!isError ? `
+      <div class="wt-rec-panel-actions">
+        <button class="wt-rec-action-btn wt-send-text-btn" title="Delete audio and paste text in input">
+          ✉️ Send as Text
+        </button>
+        <button class="wt-rec-action-btn wt-keep-audio-btn" title="Keep the audio, dismiss transcription">
+          🎵 Keep Audio
+        </button>
+        <button class="wt-rec-action-btn wt-copy-text-btn" title="Copy transcription to clipboard">
+          📋 Copy
+        </button>
+      </div>
+      ` : ''}
+    `;
+
+    // Insert above the recording bar
+    const recordingBar = document.querySelector('._ak1r');
+    if (recordingBar && recordingBar.parentElement) {
+      recordingBar.parentElement.insertBefore(panel, recordingBar);
+    } else {
+      // Fallback: try the footer
+      const footer = document.querySelector('footer');
+      if (footer) {
+        footer.insertBefore(panel, footer.firstChild);
+      }
+    }
+
+    currentTranscriptionPanel = panel;
+
+    // Wire up event listeners
+    panel.querySelector('.wt-rec-panel-close')?.addEventListener('click', removeTranscriptionPanel);
+
+    panel.querySelector('.wt-send-text-btn')?.addEventListener('click', () => {
+      handleSendAsText(text);
+    });
+
+    panel.querySelector('.wt-keep-audio-btn')?.addEventListener('click', () => {
+      removeTranscriptionPanel();
+    });
+
+    panel.querySelector('.wt-copy-text-btn')?.addEventListener('click', async (e) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        e.target.textContent = '✅ Copied';
+        setTimeout(() => { e.target.textContent = '📋 Copy'; }, 2000);
+      } catch (err) {
+        console.error('[WhatsApp Transcriber] Copy error:', err);
+      }
+    });
+  }
+
+  function removeTranscriptionPanel() {
+    const panel = document.getElementById('wt-recording-transcription-panel');
+    if (panel) {
+      panel.remove();
+    }
+    currentTranscriptionPanel = null;
+  }
+
+  function handleSendAsText(text) {
+    // 1. Click Cancel to delete the audio recording
+    const cancelBtn = findRecordingCancelButton();
+
+    // Remove our panel first
+    removeTranscriptionPanel();
+
+    if (cancelBtn) {
+      cancelBtn.click();
+    }
+
+    // 2. Wait for the recording bar to disappear and the text input to become available
+    setTimeout(() => {
+      pasteTextInInput(text);
+    }, 400);
+  }
+
+  function pasteTextInInput(text) {
+    // Find WhatsApp's text input (multiple fallback selectors)
+    const input = document.querySelector('#main .copyable-area [contenteditable="true"][role="textbox"]')
+      || document.querySelector('[contenteditable="true"][data-tab="10"]')
+      || document.querySelector('#main [contenteditable="true"]');
+
+    if (!input) {
+      diagLog('error', 'recording', 'Could not find text input to paste transcription');
+      return;
+    }
+
+    // Focus the input
+    input.focus();
+
+    // Use ClipboardEvent paste (most reliable for WhatsApp Web's React-based input)
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData('text', text);
+    const pasteEvent = new ClipboardEvent('paste', {
+      clipboardData: dataTransfer,
+      bubbles: true
+    });
+    input.dispatchEvent(pasteEvent);
+
+    diagLog('info', 'recording', 'Transcription pasted into text input', { textLength: text.length });
+  }
+
+  function startRecordingObserver() {
+    if (recordingScanInterval) return;
+    recordingScanInterval = setInterval(scanForRecordingBar, RECORDING_SCAN_INTERVAL);
+    diagLog('info', 'recording', 'Recording bar observer started');
+  }
+
+  // ========== SCANNING & INIT ==========
+
   function startScanning() {
     if (scanningStarted) return;
     scanningStarted = true;
@@ -534,6 +946,9 @@
     
     setTimeout(scanForVoiceMessages, 500);
     setInterval(scanForVoiceMessages, SCAN_INTERVAL);
+
+    // Also start observing for recording bar (outgoing audio feature)
+    startRecordingObserver();
   }
 
   function init() {
