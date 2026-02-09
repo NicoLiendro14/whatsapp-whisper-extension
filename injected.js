@@ -6,30 +6,71 @@
   let MsgCollection = null;
   let DownloadManager = null;
   let modulesLoaded = false;
+  let moduleLoadErrors = [];
+  let moduleLoadAttempts = 0;
+
+  function notifyContentScript(action, data = {}) {
+    window.postMessage({ source: 'wt-injected-script', action, ...data }, '*');
+  }
+
+  function logToContent(level, message, extra = null) {
+    notifyContentScript(level === 'error' ? 'logError' : 'logInfo', { message, extra });
+  }
 
   function loadModules() {
     if (modulesLoaded) return true;
+    moduleLoadAttempts++;
 
     try {
-      const msgCollectionModule = window.require('WAWebMsgCollection');
-      if (msgCollectionModule?.MsgCollection) {
-        MsgCollection = msgCollectionModule.MsgCollection;
-        console.log('[WhatsApp Transcriber] MsgCollection loaded');
+      // Check if require exists
+      if (typeof window.require !== 'function') {
+        const err = 'window.require is not available (type: ' + typeof window.require + ')';
+        moduleLoadErrors.push({ attempt: moduleLoadAttempts, error: err });
+        logToContent('error', err);
+        return false;
       }
 
-      const downloadModule = window.require('WAWebDownloadManager');
-      if (downloadModule?.downloadManager) {
-        DownloadManager = downloadModule.downloadManager;
-        console.log('[WhatsApp Transcriber] DownloadManager loaded');
+      try {
+        const msgCollectionModule = window.require('WAWebMsgCollection');
+        if (msgCollectionModule?.MsgCollection) {
+          MsgCollection = msgCollectionModule.MsgCollection;
+          logToContent('info', 'MsgCollection loaded successfully');
+        } else {
+          const keys = msgCollectionModule ? Object.keys(msgCollectionModule).slice(0, 10) : [];
+          moduleLoadErrors.push({ attempt: moduleLoadAttempts, error: 'MsgCollection not found in module', moduleKeys: keys });
+          logToContent('error', 'MsgCollection not found in module', { keys });
+        }
+      } catch (e) {
+        moduleLoadErrors.push({ attempt: moduleLoadAttempts, error: 'WAWebMsgCollection: ' + e.message });
+        logToContent('error', 'Failed to require WAWebMsgCollection: ' + e.message);
+      }
+
+      try {
+        const downloadModule = window.require('WAWebDownloadManager');
+        if (downloadModule?.downloadManager) {
+          DownloadManager = downloadModule.downloadManager;
+          logToContent('info', 'DownloadManager loaded successfully');
+        } else {
+          const keys = downloadModule ? Object.keys(downloadModule).slice(0, 10) : [];
+          moduleLoadErrors.push({ attempt: moduleLoadAttempts, error: 'downloadManager not found in module', moduleKeys: keys });
+          logToContent('error', 'downloadManager not found in module', { keys });
+        }
+      } catch (e) {
+        moduleLoadErrors.push({ attempt: moduleLoadAttempts, error: 'WAWebDownloadManager: ' + e.message });
+        logToContent('error', 'Failed to require WAWebDownloadManager: ' + e.message);
       }
 
       modulesLoaded = !!(MsgCollection && DownloadManager);
-      console.log('[WhatsApp Transcriber] Modules loaded:', modulesLoaded);
+      logToContent('info', 'Module load result: ' + (modulesLoaded ? 'SUCCESS' : 'PARTIAL/FAILED'), {
+        hasMsgCollection: !!MsgCollection,
+        hasDownloadManager: !!DownloadManager
+      });
       
       return modulesLoaded;
 
     } catch (error) {
-      console.error('[WhatsApp Transcriber] Error loading modules:', error);
+      moduleLoadErrors.push({ attempt: moduleLoadAttempts, error: error.message, stack: error.stack?.substring(0, 200) });
+      logToContent('error', 'Exception loading modules: ' + error.message);
       return false;
     }
   }
@@ -239,11 +280,73 @@
         downloadManagerAvailable: !!DownloadManager
       }, '*');
     }
+
+    if (message.action === 'getDiagnostics') {
+      // Collect detailed diagnostics from the injected script context
+      let requireInfo = 'unknown';
+      let availableModules = [];
+      try {
+        requireInfo = typeof window.require;
+        if (typeof window.require === 'function' && window.require.m) {
+          // Try to list some module names
+          const moduleKeys = Object.keys(window.require.m);
+          availableModules = moduleKeys.filter(k => k.includes('WAWeb')).slice(0, 30);
+        }
+      } catch (e) {
+        requireInfo = 'error checking: ' + e.message;
+      }
+
+      let downloadManagerMethods = [];
+      if (DownloadManager) {
+        try {
+          downloadManagerMethods = Object.keys(DownloadManager).filter(k => typeof DownloadManager[k] === 'function');
+        } catch (e) {}
+      }
+
+      let msgCollectionMethods = [];
+      if (MsgCollection) {
+        try {
+          msgCollectionMethods = Object.keys(MsgCollection).filter(k => typeof MsgCollection[k] === 'function').slice(0, 20);
+        } catch (e) {}
+      }
+
+      window.postMessage({
+        source: 'wt-injected-script',
+        action: 'injectedDiagnostics',
+        requestId: message.requestId,
+        diagnostics: {
+          modulesLoaded,
+          hasMsgCollection: !!MsgCollection,
+          hasDownloadManager: !!DownloadManager,
+          moduleLoadAttempts,
+          moduleLoadErrors: moduleLoadErrors.slice(-10),
+          requireType: requireInfo,
+          waWebModulesFound: availableModules,
+          downloadManagerMethods,
+          msgCollectionMethods
+        }
+      }, '*');
+    }
   });
 
   setTimeout(() => {
     loadModules();
   }, 1000);
+
+  // Retry module loading a few times
+  setTimeout(() => {
+    if (!modulesLoaded) {
+      logToContent('info', 'Retrying module load (3s)...');
+      loadModules();
+    }
+  }, 3000);
+
+  setTimeout(() => {
+    if (!modulesLoaded) {
+      logToContent('warn', 'Retrying module load (8s - last attempt)...');
+      loadModules();
+    }
+  }, 8000);
 
   window.postMessage({
     source: 'wt-injected-script',

@@ -135,6 +135,35 @@
     .help a:hover {
       text-decoration: underline;
     }
+
+    /* Diagnostics */
+    .diag-section {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
+    }
+
+    #diagBtn {
+      background: #6c757d;
+      font-size: 12px;
+    }
+
+    #diagBtn:hover {
+      background: #5a6268;
+    }
+
+    #diagBtn:disabled {
+      background: #999;
+      cursor: not-allowed;
+    }
+
+    #diagBtn.success {
+      background: #28a745;
+    }
+
+    #diagBtn.error {
+      background: #dc3545;
+    }
   </style>
 </head>
 <body>
@@ -160,6 +189,10 @@
           Get one here →
         </a>
       </p>
+    </div>
+
+    <div class="diag-section">
+      <button id="diagBtn">Run Diagnostics &amp; Copy to Clipboard</button>
     </div>
   </div>
   

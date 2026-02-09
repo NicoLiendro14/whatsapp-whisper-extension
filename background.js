@@ -14,6 +14,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(() => sendResponse({ exists: false }));
     return true;
   }
+
+  if (message.action === 'getDiagnostics') {
+    // Forward to active WhatsApp Web tab
+    chrome.tabs.query({ url: 'https://web.whatsapp.com/*' }, (tabs) => {
+      if (!tabs || tabs.length === 0) {
+        sendResponse({ 
+          success: false, 
+          error: 'No WhatsApp Web tab found. Open web.whatsapp.com first.',
+          backgroundInfo: {
+            extensionId: chrome.runtime.id,
+            manifestVersion: chrome.runtime.getManifest().version,
+            extensionName: chrome.runtime.getManifest().name
+          }
+        });
+        return;
+      }
+
+      const tab = tabs[0];
+      chrome.tabs.sendMessage(tab.id, { action: 'getDiagnostics' }, (response) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ 
+            success: false, 
+            error: 'Content script not responding: ' + chrome.runtime.lastError.message,
+            backgroundInfo: {
+              extensionId: chrome.runtime.id,
+              manifestVersion: chrome.runtime.getManifest().version,
+              tabId: tab.id,
+              tabUrl: tab.url,
+              tabStatus: tab.status,
+              hint: 'Content script may not be loaded. Try reloading WhatsApp Web.'
+            }
+          });
+        } else {
+          // Enrich with background info
+          if (response && response.diagnostics) {
+            response.diagnostics.extensionId = chrome.runtime.id;
+            response.diagnostics.extensionVersion = chrome.runtime.getManifest().version;
+          }
+          sendResponse(response);
+        }
+      });
+    });
+    return true;
+  }
 });
 
 async function checkApiKeyExists() {

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+tmp/
+.playwright-mcp/
+.autopilot.json
+autopilot.log
+*.mp4
+w.html
+WhatsApp*.html
+screenshots/
+screenshots-v2/
