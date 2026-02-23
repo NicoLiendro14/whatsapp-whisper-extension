@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-const DAILY_LIMIT_FREE = 20;
+const DAILY_LIMIT_FREE = 30;
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
