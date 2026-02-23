@@ -552,13 +552,12 @@
 
     if (cached) {
       transcribeBtn.innerHTML = '✅ Transcribed';
-      transcribeBtn.title = 'Already transcribed (cached)';
+      transcribeBtn.title = 'Already transcribed';
       transcribeBtn.classList.add('success');
       transcribeBtn.disabled = true;
     } else {
-      const remaining = getDailyRemaining();
-      transcribeBtn.innerHTML = `📝 Transcribe (${remaining})`;
-      transcribeBtn.title = `Transcribe with OpenAI Whisper — ${remaining} left today`;
+      transcribeBtn.innerHTML = '📝 Transcribe';
+      transcribeBtn.title = 'Transcribe with OpenAI Whisper';
     }
 
     const btnContainer = document.createElement('div');
@@ -573,7 +572,7 @@
     }
 
     if (cached) {
-      displayTranscription(messageContainer, cached.text, false, ' (cached)');
+      displayTranscription(messageContainer, cached.text);
       diagLog('info', 'cache', 'Restored cached transcription', { msgId, textLength: cached.text.length });
     } else {
       transcribeBtn.addEventListener('click', async (e) => {
@@ -593,7 +592,7 @@
       // Check in-memory cache first (in case it was populated after button was created)
       const cached = cacheGet(msgId);
       if (cached) {
-        displayTranscription(messageContainer, cached.text, false, ' (cached)');
+        displayTranscription(messageContainer, cached.text);
         button.innerHTML = '✅ Transcribed';
         button.classList.add('success');
         button.disabled = true;
@@ -657,8 +656,7 @@
         incrementDailyCounter();
 
         const remaining = getDailyRemaining();
-        let extraInfo = ` (${remaining} left today)`;
-        displayTranscription(messageContainer, result.text, false, extraInfo);
+        displayTranscription(messageContainer, result.text, false, ` (${remaining} free left today)`);
         button.innerHTML = '✅ Transcribed';
         button.classList.remove('loading');
         button.classList.add('success');
@@ -676,8 +674,7 @@
       
       setTimeout(() => {
         button.disabled = false;
-        const remaining = getDailyRemaining();
-        button.innerHTML = `🔄 Retry (${remaining})`;
+        button.innerHTML = '🔄 Retry';
         button.classList.remove('error');
       }, 3000);
     }
