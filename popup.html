@@ -13,7 +13,7 @@
     
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      width: 320px;
+      width: 340px;
       padding: 20px;
       background: linear-gradient(135deg, #075e54 0%, #128c7e 100%);
       color: #fff;
@@ -36,13 +36,90 @@
     }
     
     h1::before {
-      content: "🎙️";
+      content: "\1F399\FE0F";
     }
     
     .subtitle {
       font-size: 12px;
       color: #667;
       margin-bottom: 16px;
+    }
+
+    /* Provider status card */
+    .provider-card {
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .provider-card.cloudflare {
+      background: #e7f3ff;
+      border: 1px solid #b8daff;
+      color: #004085;
+    }
+
+    .provider-card.openai {
+      background: #d4edda;
+      border: 1px solid #c3e6cb;
+      color: #155724;
+    }
+
+    .provider-card.none {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      color: #856404;
+    }
+
+    .provider-card .provider-title {
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .provider-card .usage-bar {
+      height: 6px;
+      background: rgba(0,0,0,0.1);
+      border-radius: 3px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+
+    .provider-card .usage-bar-fill {
+      height: 100%;
+      background: #007bff;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+
+    .provider-card .usage-text {
+      font-size: 11px;
+      margin-top: 4px;
+      opacity: 0.8;
+    }
+
+    /* Section divider */
+    .section-divider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 0 12px;
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .section-divider::before,
+    .section-divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: #ddd;
     }
     
     label {
@@ -51,6 +128,12 @@
       font-weight: 600;
       margin-bottom: 6px;
       color: #444;
+    }
+
+    .label-hint {
+      font-weight: 400;
+      color: #999;
+      font-size: 11px;
     }
     
     input[type="password"] {
@@ -136,6 +219,22 @@
       text-decoration: underline;
     }
 
+    #removeKeyBtn {
+      background: none;
+      color: #dc3545;
+      font-size: 11px;
+      font-weight: 400;
+      margin-top: 6px;
+      padding: 4px 0;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    #removeKeyBtn:hover {
+      color: #a71d2a;
+      background: none;
+    }
+
     /* Diagnostics */
     .diag-section {
       margin-top: 16px;
@@ -170,8 +269,15 @@
   <div class="container">
     <h1>WhatsApp Transcriber</h1>
     <p class="subtitle">Voice message transcription</p>
-    
-    <label for="apiKey">OpenAI API Key</label>
+
+    <!-- Provider status -->
+    <div id="providerCard" class="provider-card none" style="display:none;"></div>
+
+    <div class="section-divider">OpenAI API Key</div>
+
+    <label for="apiKey">
+      API Key <span class="label-hint">(optional — for unlimited use)</span>
+    </label>
     <input 
       type="password" 
       id="apiKey" 
@@ -180,15 +286,17 @@
     >
     
     <button id="saveBtn">Save API Key</button>
+    <button id="removeKeyBtn" style="display:none;">Remove API key (use free tier)</button>
     
     <div id="status" class="status"></div>
     
     <div class="help">
       <p>Don't have an API Key? 
         <a href="https://platform.openai.com/api-keys" target="_blank">
-          Get one here →
+          Get one here &rarr;
         </a>
       </p>
+      <p style="margin-top: 6px;">Without a key, you get 20 free transcriptions/day.</p>
     </div>
 
     <div class="diag-section">

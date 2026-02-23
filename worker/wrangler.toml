@@ -1,0 +1,11 @@
+name = "wt-transcribe"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "3cf4314ecac241879fba52c275a31759"

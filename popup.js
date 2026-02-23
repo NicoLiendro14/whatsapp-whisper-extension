@@ -1,30 +1,82 @@
 document.addEventListener('DOMContentLoaded', () => {
   const apiKeyInput = document.getElementById('apiKey');
   const saveBtn = document.getElementById('saveBtn');
+  const removeKeyBtn = document.getElementById('removeKeyBtn');
   const statusDiv = document.getElementById('status');
+  const providerCard = document.getElementById('providerCard');
 
-  loadExistingApiKey();
+  loadState();
 
   saveBtn.addEventListener('click', saveApiKey);
+  removeKeyBtn.addEventListener('click', removeApiKey);
 
   apiKeyInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      saveApiKey();
-    }
+    if (e.key === 'Enter') saveApiKey();
   });
 
-  async function loadExistingApiKey() {
+  async function loadState() {
     try {
       const result = await chrome.storage.local.get(['openai_api_key']);
       if (result.openai_api_key) {
         const key = result.openai_api_key;
         const masked = key.substring(0, 7) + '...' + key.substring(key.length - 4);
         apiKeyInput.placeholder = masked;
-        showStatus('API Key configured ✓', 'info');
+        removeKeyBtn.style.display = 'block';
       }
     } catch (error) {
       console.error('Error loading API key:', error);
     }
+
+    refreshProviderInfo();
+  }
+
+  async function refreshProviderInfo() {
+    try {
+      const info = await sendMessage({ action: 'getProviderInfo' });
+      renderProviderCard(info);
+    } catch {
+      renderProviderCard({ provider: 'none', ready: false });
+    }
+  }
+
+  function renderProviderCard(info) {
+    providerCard.style.display = 'block';
+
+    if (info.provider === 'openai') {
+      providerCard.className = 'provider-card openai';
+      providerCard.innerHTML = `
+        <div class="provider-title">&#x2705; Using your OpenAI API key</div>
+        <div>Unlimited transcriptions. Powered by Whisper.</div>
+      `;
+      return;
+    }
+
+    if (info.provider === 'cloudflare') {
+      providerCard.className = 'provider-card cloudflare';
+      providerCard.innerHTML = `
+        <div class="provider-title">&#x2601;&#xFE0F; Free tier active</div>
+        <div>Loading usage...</div>
+      `;
+
+      sendMessage({ action: 'getUsage' }).then(usage => {
+        if (!usage) return;
+        const pct = Math.round((usage.used / usage.limit) * 100);
+        providerCard.innerHTML = `
+          <div class="provider-title">&#x2601;&#xFE0F; Free tier active</div>
+          <div>${usage.remaining} transcriptions remaining today</div>
+          <div class="usage-bar"><div class="usage-bar-fill" style="width:${pct}%"></div></div>
+          <div class="usage-text">${usage.used} / ${usage.limit} used today</div>
+        `;
+      }).catch(() => {});
+
+      return;
+    }
+
+    providerCard.className = 'provider-card none';
+    providerCard.innerHTML = `
+      <div class="provider-title">&#x26A0;&#xFE0F; No provider configured</div>
+      <div>Add an OpenAI API key below to start transcribing.</div>
+    `;
   }
 
   async function saveApiKey() {
@@ -51,16 +103,27 @@ document.addEventListener('DOMContentLoaded', () => {
       apiKeyInput.value = '';
       const masked = apiKey.substring(0, 7) + '...' + apiKey.substring(apiKey.length - 4);
       apiKeyInput.placeholder = masked;
+      removeKeyBtn.style.display = 'block';
       
-      showStatus('API Key saved successfully! 🎉', 'success');
+      showStatus('API Key saved! Unlimited transcriptions enabled.', 'success');
+      refreshProviderInfo();
       
-      setTimeout(() => {
-        showStatus('API Key configured ✓', 'info');
-      }, 3000);
-
+      setTimeout(() => showStatus('API Key configured ✓', 'info'), 3000);
     } catch (error) {
       console.error('Error saving API key:', error);
       showStatus('Error saving: ' + error.message, 'error');
+    }
+  }
+
+  async function removeApiKey() {
+    try {
+      await chrome.storage.local.remove('openai_api_key');
+      apiKeyInput.placeholder = 'sk-...';
+      removeKeyBtn.style.display = 'none';
+      showStatus('API key removed. Using free tier.', 'info');
+      refreshProviderInfo();
+    } catch (error) {
+      showStatus('Error: ' + error.message, 'error');
     }
   }
 
@@ -69,7 +132,19 @@ document.addEventListener('DOMContentLoaded', () => {
     statusDiv.className = 'status ' + type;
   }
 
-  // ========== DIAGNOSTICS ==========
+  function sendMessage(msg) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(msg, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  // ── Diagnostics ──
   const diagBtn = document.getElementById('diagBtn');
 
   diagBtn.addEventListener('click', async () => {
@@ -81,10 +156,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const report = await collectFullReport();
       const text = formatReport(report);
 
-      // Copy to clipboard
       try {
         await navigator.clipboard.writeText(text);
-      } catch (e) {
+      } catch {
         const ta = document.createElement('textarea');
         ta.value = text;
         document.body.appendChild(ta);
@@ -96,7 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
       diagBtn.textContent = 'Copied to clipboard!';
       diagBtn.className = 'success';
     } catch (err) {
-      // Even on error, try to copy whatever we got
       const errReport = `=== WhatsApp Transcriber Diagnostic Report ===\nGenerated: ${new Date().toISOString()}\nError: ${err.message}\n`;
       try { await navigator.clipboard.writeText(errReport); } catch (_) {}
       
@@ -125,7 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function formatReport(response) {
     const lines = [];
-    const hr = '─'.repeat(50);
+    const hr = '\u2500'.repeat(50);
 
     lines.push('=== WhatsApp Transcriber Diagnostic Report ===');
     lines.push(`Generated: ${new Date().toISOString()}`);
@@ -147,7 +220,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const d = response.diagnostics;
 
-    // --- Section: Environment ---
     lines.push(hr);
     lines.push('ENVIRONMENT');
     lines.push(hr);
@@ -160,7 +232,6 @@ document.addEventListener('DOMContentLoaded', () => {
     lines.push(`Extension loaded:   ${d.loadedAt}`);
     lines.push(`Uptime:             ${d.uptime}`);
 
-    // --- Section: Extension State ---
     lines.push('');
     lines.push(hr);
     lines.push('EXTENSION STATE');
@@ -174,7 +245,6 @@ document.addEventListener('DOMContentLoaded', () => {
     lines.push(`Selector hits:           ${d.activeSelectorHits || 0}`);
     lines.push(`Total selectors:         ${d.totalSelectorsAvailable || 'unknown'}`);
 
-    // --- Section: DOM State ---
     lines.push('');
     lines.push(hr);
     lines.push('DOM STATE');
@@ -192,7 +262,6 @@ document.addEventListener('DOMContentLoaded', () => {
       lines.push('DOM data not available');
     }
 
-    // --- Section: Aria Labels ---
     lines.push('');
     lines.push(hr);
     lines.push('ARIA LABELS ANALYSIS');
@@ -217,7 +286,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // --- Section: Injected Script / WA Modules ---
     lines.push('');
     lines.push(hr);
     lines.push('WHATSAPP INTERNAL MODULES');
@@ -257,7 +325,6 @@ document.addEventListener('DOMContentLoaded', () => {
       lines.push('No injected script data available');
     }
 
-    // --- Section: Event Log ---
     lines.push('');
     lines.push(hr);
     lines.push('EVENT LOG');
@@ -272,7 +339,6 @@ document.addEventListener('DOMContentLoaded', () => {
       lines.push('No log entries.');
     }
 
-    // --- Section: Raw JSON (for devs) ---
     lines.push('');
     lines.push(hr);
     lines.push('RAW JSON');

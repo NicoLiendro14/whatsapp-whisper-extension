@@ -535,3 +535,11 @@ body[class*="dark"] .wt-copy-text-btn:hover {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(37, 211, 102, 0.5);
 }
+
+/* Free tier remaining indicator */
+.wt-result-meta {
+  font-size: 10px;
+  font-weight: 400;
+  color: #8696a0;
+  margin-left: 6px;
+}

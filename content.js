@@ -466,9 +466,9 @@
       button.innerHTML = '⏳ Getting audio...';
       button.classList.add('loading');
 
-      const apiKeyCheck = await sendMessageToBackground({ action: 'checkApiKey' });
-      if (!apiKeyCheck.exists) {
-        throw new Error('API Key not configured. Click the extension icon.');
+      const providerInfo = await sendMessageToBackground({ action: 'getProviderInfo' });
+      if (!providerInfo.ready) {
+        throw new Error('No transcription provider configured. Click the extension icon.');
       }
 
       if (!injectedScriptReady) {
@@ -503,7 +503,11 @@
       });
 
       if (result.success) {
-        displayTranscription(messageContainer, result.text);
+        let extraInfo = '';
+        if (result.provider === 'cloudflare' && result.remaining != null) {
+          extraInfo = ` (${result.remaining} free left today)`;
+        }
+        displayTranscription(messageContainer, result.text, false, extraInfo);
         button.innerHTML = '✅ Transcribed';
         button.classList.remove('loading');
         button.classList.add('success');
@@ -527,7 +531,7 @@
     }
   }
 
-  function displayTranscription(messageContainer, text, isError = false) {
+  function displayTranscription(messageContainer, text, isError = false, extraInfo = '') {
     let resultDiv = messageContainer.querySelector('.' + RESULT_CLASS);
     
     if (!resultDiv) {
@@ -538,10 +542,12 @@
 
     resultDiv.classList.toggle('error', isError);
     
+    const titleSuffix = extraInfo ? `<span class="wt-result-meta">${escapeHtml(extraInfo)}</span>` : '';
+    
     resultDiv.innerHTML = `
       <div class="wt-result-header">
         <span class="wt-result-icon">${isError ? '⚠️' : '📝'}</span>
-        <span class="wt-result-title">${isError ? 'Error' : 'Transcription'}</span>
+        <span class="wt-result-title">${isError ? 'Error' : 'Transcription'}${titleSuffix}</span>
       </div>
       <div class="wt-result-text">${escapeHtml(text)}</div>
       ${!isError ? '<button class="wt-copy-btn" title="Copy to clipboard">📋 Copy</button>' : ''}
@@ -763,10 +769,10 @@
         await new Promise(r => setTimeout(r, 300));
       }
 
-      // 2. Check API key
-      const apiKeyCheck = await sendMessageToBackground({ action: 'checkApiKey' });
-      if (!apiKeyCheck.exists) {
-        throw new Error('API Key not configured. Click the extension icon.');
+      // 2. Check transcription provider is available
+      const providerInfo = await sendMessageToBackground({ action: 'getProviderInfo' });
+      if (!providerInfo.ready) {
+        throw new Error('No transcription provider configured. Click the extension icon.');
       }
 
       // 3. Get captured audio from our parallel recorder (getUserMedia interceptor)
