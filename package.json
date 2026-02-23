@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-audio-transcriber",
   "version": "1.0.0",
-  "description": "Transcribe WhatsApp voice messages using OpenAI Whisper API",
+  "description": "Transcribe WhatsApp voice messages instantly — powered by AI",
   "private": true,
   "scripts": {
     "build": "node scripts/build.js"

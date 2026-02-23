@@ -599,7 +599,7 @@
       transcribeBtn.disabled = true;
     } else {
       transcribeBtn.innerHTML = '📝 Transcribe';
-      transcribeBtn.title = 'Transcribe with OpenAI Whisper';
+      transcribeBtn.title = 'Transcribe voice message';
     }
 
     const btnContainer = document.createElement('div');

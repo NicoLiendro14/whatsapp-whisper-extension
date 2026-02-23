@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "WhatsApp Audio Transcriber",
   "version": "1.0.0",
-  "description": "Transcribe WhatsApp voice messages using OpenAI Whisper API",
+  "description": "Transcribe WhatsApp voice messages instantly — powered by AI",
   
   "permissions": [
     "storage",

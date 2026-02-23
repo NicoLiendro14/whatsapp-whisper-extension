@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>Slide 1 - Transcribe Voice Messages</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1280px;
+    height: 800px;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0a0a0a;
+    color: #fff;
+    position: relative;
+  }
+
+  .bg-glow {
+    position: absolute;
+    width: 900px;
+    height: 900px;
+    border-radius: 50%;
+    filter: blur(180px);
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  .glow-1 {
+    top: -300px;
+    right: -200px;
+    background: #075e54;
+  }
+
+  .glow-2 {
+    bottom: -400px;
+    right: 100px;
+    background: #128c7e;
+    opacity: 0.2;
+  }
+
+  .glow-3 {
+    top: 50%;
+    left: -300px;
+    background: #25d366;
+    opacity: 0.1;
+    width: 600px;
+    height: 600px;
+  }
+
+  .layout {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding: 0 80px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .left {
+    flex: 1;
+    padding-right: 60px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 18px;
+    border-radius: 24px;
+    background: rgba(37, 211, 102, 0.1);
+    border: 1px solid rgba(37, 211, 102, 0.3);
+    font-size: 13px;
+    font-weight: 600;
+    color: #25d366;
+    margin-bottom: 28px;
+    letter-spacing: 0.3px;
+  }
+
+  .badge::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #25d366;
+    box-shadow: 0 0 8px #25d366;
+  }
+
+  h1 {
+    font-size: 52px;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    letter-spacing: -1.5px;
+  }
+
+  h1 .highlight {
+    color: #25d366;
+  }
+
+  .subtitle {
+    font-size: 18px;
+    line-height: 1.6;
+    color: rgba(255,255,255,0.55);
+    max-width: 420px;
+  }
+
+  .right {
+    flex-shrink: 0;
+    width: 520px;
+  }
+
+  /* macOS-style window */
+  .window {
+    background: #111b21;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 25px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.06);
+  }
+
+  .window-header {
+    display: flex;
+    align-items: center;
+    padding: 14px 18px;
+    background: #1f2c33;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .window-dots {
+    display: flex;
+    gap: 8px;
+  }
+
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #febc2e; }
+  .dot-green { background: #28c840; }
+
+  .window-title {
+    flex: 1;
+    text-align: center;
+    font-size: 12px;
+    color: rgba(255,255,255,0.4);
+    font-weight: 500;
+    letter-spacing: 0.3px;
+  }
+
+  .window-body {
+    padding: 0;
+  }
+
+  /* WhatsApp chat mockup */
+  .chat-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px;
+    background: #1f2c33;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #25d366, #128c7e);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .chat-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e9edef;
+  }
+
+  .chat-status {
+    font-size: 12px;
+    color: #8696a0;
+  }
+
+  .messages {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 320px;
+    background: #0b141a;
+  }
+
+  .msg {
+    max-width: 85%;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .msg-incoming {
+    background: #1f2c33;
+    color: #e9edef;
+    align-self: flex-start;
+    border-top-left-radius: 0;
+  }
+
+  .msg-outgoing {
+    background: #005c4b;
+    color: #e9edef;
+    align-self: flex-end;
+    border-top-right-radius: 0;
+  }
+
+  .msg-time {
+    font-size: 11px;
+    color: #8696a0;
+    text-align: right;
+    margin-top: 4px;
+  }
+
+  /* Voice message bubble */
+  .voice-msg {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    min-width: 260px;
+  }
+
+  .play-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: #25d366;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .play-icon {
+    width: 0;
+    height: 0;
+    border-left: 10px solid #fff;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    margin-left: 2px;
+  }
+
+  .waveform {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+  }
+
+  .wave-bar {
+    width: 3px;
+    border-radius: 2px;
+    background: #8696a0;
+  }
+
+  .voice-duration {
+    font-size: 11px;
+    color: #8696a0;
+    flex-shrink: 0;
+  }
+
+  /* Transcribe button */
+  .transcribe-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #25d366;
+    background: rgba(37, 211, 102, 0.1);
+    border: 1px solid rgba(37, 211, 102, 0.3);
+    border-radius: 7px;
+    margin-top: 6px;
+    letter-spacing: 0.2px;
+  }
+
+  /* Transcription result */
+  .transcription-result {
+    margin-top: 6px;
+    padding: 8px 12px;
+    background: #1f2c33;
+    border: 1px solid #243842;
+    border-left: 3px solid #25d366;
+    border-radius: 6px;
+    max-width: 280px;
+  }
+
+  .result-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .result-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #25d366;
+  }
+
+  .result-text {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #e9edef;
+  }
+
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #25d366;
+    border: 1px solid rgba(37, 211, 102, 0.3);
+    border-radius: 5px;
+    background: transparent;
+  }
+
+  /* Dots */
+  .dots {
+    position: absolute;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+    z-index: 2;
+  }
+
+  .dot-nav {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+  }
+
+  .dot-nav.active {
+    background: #25d366;
+    box-shadow: 0 0 10px rgba(37, 211, 102, 0.5);
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-glow glow-1"></div>
+<div class="bg-glow glow-2"></div>
+<div class="bg-glow glow-3"></div>
+
+<div class="layout">
+  <div class="left">
+    <div class="badge">Chrome Extension</div>
+    <h1>Transcribe any<br><span class="highlight">voice message</span><br>instantly</h1>
+    <p class="subtitle">One-click transcription for every voice message on WhatsApp Web. Powered by AI.</p>
+  </div>
+
+  <div class="right">
+    <div class="window">
+      <div class="window-header">
+        <div class="window-dots">
+          <div class="dot dot-red"></div>
+          <div class="dot dot-yellow"></div>
+          <div class="dot dot-green"></div>
+        </div>
+        <div class="window-title">WhatsApp Web</div>
+        <div style="width:52px;"></div>
+      </div>
+
+      <div class="chat-header">
+        <div class="avatar">M</div>
+        <div>
+          <div class="chat-name">María</div>
+          <div class="chat-status">online</div>
+        </div>
+      </div>
+
+      <div class="messages">
+        <div class="msg msg-outgoing">
+          <div>Hey! Did you listen to the meeting notes?</div>
+          <div class="msg-time">10:32</div>
+        </div>
+
+        <div class="msg msg-incoming">
+          <div class="voice-msg">
+            <div class="play-btn"><div class="play-icon"></div></div>
+            <div class="waveform">
+              <div class="wave-bar" style="height:8px;"></div>
+              <div class="wave-bar" style="height:14px;"></div>
+              <div class="wave-bar" style="height:20px;"></div>
+              <div class="wave-bar" style="height:12px;"></div>
+              <div class="wave-bar" style="height:24px;"></div>
+              <div class="wave-bar" style="height:18px;"></div>
+              <div class="wave-bar" style="height:10px;"></div>
+              <div class="wave-bar" style="height:22px;"></div>
+              <div class="wave-bar" style="height:16px;"></div>
+              <div class="wave-bar" style="height:8px;"></div>
+              <div class="wave-bar" style="height:20px;"></div>
+              <div class="wave-bar" style="height:14px;"></div>
+              <div class="wave-bar" style="height:6px;"></div>
+              <div class="wave-bar" style="height:18px;"></div>
+              <div class="wave-bar" style="height:24px;"></div>
+              <div class="wave-bar" style="height:10px;"></div>
+              <div class="wave-bar" style="height:16px;"></div>
+              <div class="wave-bar" style="height:12px;"></div>
+              <div class="wave-bar" style="height:20px;"></div>
+              <div class="wave-bar" style="height:8px;"></div>
+            </div>
+            <div class="voice-duration">0:47</div>
+          </div>
+          <div class="msg-time">10:34</div>
+          <div class="transcribe-btn">📝 Transcribe</div>
+
+          <div class="transcription-result">
+            <div class="result-header">
+              <span style="font-size:12px;">🎙️</span>
+              <span class="result-label">Transcription</span>
+            </div>
+            <div class="result-text">Yes! So basically the client wants to move the deadline to next Friday. They also asked if we can add the export feature before the demo. I told them we'd check with the team first.</div>
+            <div class="copy-btn">📋 Copy</div>
+          </div>
+        </div>
+
+        <div class="msg msg-outgoing">
+          <div>Perfect, thanks! That's super clear 👍</div>
+          <div class="msg-time">10:35</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="dots">
+  <div class="dot-nav active"></div>
+  <div class="dot-nav"></div>
+  <div class="dot-nav"></div>
+</div>
+
+</body>
+</html>
