@@ -492,16 +492,58 @@
     });
   }
 
+  function getScrollContainer(referenceEl) {
+    // Walk up from a message element to find the actual scrollable ancestor
+    let el = referenceEl || document.querySelector('#main .message-in, #main .message-out');
+    while (el && el !== document.body) {
+      const style = window.getComputedStyle(el);
+      const overflowY = style.overflowY;
+      if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
   function processBatch(buttons, startIndex) {
     const endIndex = Math.min(startIndex + BATCH_SIZE, buttons.length);
     let processed = 0;
-    
+
+    const scroller = getScrollContainer(buttons[startIndex]);
+    const prevScrollTop = scroller ? scroller.scrollTop : 0;
+    const prevScrollHeight = scroller ? scroller.scrollHeight : 0;
+
+    diagLog('info', 'scroll', 'Before batch insert', {
+      scrollerFound: !!scroller,
+      scrollerTag: scroller?.tagName,
+      scrollerClass: scroller?.className?.substring(0, 80),
+      scrollerRole: scroller?.getAttribute('role'),
+      prevScrollTop,
+      prevScrollHeight,
+      batchStart: startIndex,
+      batchEnd: endIndex
+    });
+
     for (let i = startIndex; i < endIndex; i++) {
       const button = buttons[i];
       if (!button.hasAttribute(PROCESSED_ATTR)) {
         button.setAttribute(PROCESSED_ATTR, 'true');
         addTranscribeButton(button);
         processed++;
+      }
+    }
+
+    if (processed > 0 && scroller) {
+      const newScrollHeight = scroller.scrollHeight;
+      const heightDelta = newScrollHeight - prevScrollHeight;
+      if (heightDelta > 0) {
+        scroller.scrollTop = prevScrollTop + heightDelta;
+        diagLog('info', 'scroll', 'Compensated scroll', {
+          heightDelta,
+          newScrollTop: scroller.scrollTop,
+          newScrollHeight
+        });
       }
     }
 
