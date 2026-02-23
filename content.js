@@ -12,6 +12,16 @@
   const SCAN_INTERVAL = 2500;
   const BATCH_SIZE = 5;
 
+  // ========== TRANSCRIPTION CACHE ==========
+  const CACHE_STORAGE_KEY = 'wt_transcription_cache';
+  const MAX_CACHE_ENTRIES = 500;
+  const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const DAILY_TRANSCRIPTION_LIMIT = 30;
+  const DAILY_COUNTER_KEY = 'wt_daily_counter';
+
+  const transcriptionCache = new Map();
+  let dailyCounter = { date: '', count: 0 };
+
   let injectedScriptReady = false;
   let pendingRequests = new Map();
   let requestIdCounter = 0;
@@ -22,6 +32,107 @@
   let recordingScanInterval = null;
   let currentTranscriptionPanel = null;
   let isTranscribing = false;
+
+  // ========== CACHE PERSISTENCE ==========
+
+  function getTodayKey() {
+    return new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  }
+
+  async function loadCache() {
+    try {
+      const result = await chrome.storage.local.get([CACHE_STORAGE_KEY, DAILY_COUNTER_KEY]);
+
+      if (result[CACHE_STORAGE_KEY]) {
+        const entries = result[CACHE_STORAGE_KEY];
+        const now = Date.now();
+        let loaded = 0;
+        for (const [msgId, entry] of Object.entries(entries)) {
+          if (now - entry.timestamp < CACHE_TTL_MS) {
+            transcriptionCache.set(msgId, entry);
+            loaded++;
+          }
+        }
+        console.log(`[WhatsApp Transcriber] Cache loaded: ${loaded} transcriptions`);
+      }
+
+      const today = getTodayKey();
+      if (result[DAILY_COUNTER_KEY] && result[DAILY_COUNTER_KEY].date === today) {
+        dailyCounter = result[DAILY_COUNTER_KEY];
+      } else {
+        dailyCounter = { date: today, count: 0 };
+      }
+    } catch (e) {
+      console.warn('[WhatsApp Transcriber] Failed to load cache:', e.message);
+    }
+  }
+
+  async function saveCache() {
+    try {
+      const entries = {};
+      const now = Date.now();
+      for (const [msgId, entry] of transcriptionCache) {
+        if (now - entry.timestamp < CACHE_TTL_MS) {
+          entries[msgId] = entry;
+        }
+      }
+
+      const keys = Object.keys(entries);
+      if (keys.length > MAX_CACHE_ENTRIES) {
+        const sorted = keys.sort((a, b) => entries[a].timestamp - entries[b].timestamp);
+        for (let i = 0; i < sorted.length - MAX_CACHE_ENTRIES; i++) {
+          delete entries[sorted[i]];
+        }
+      }
+
+      await chrome.storage.local.set({
+        [CACHE_STORAGE_KEY]: entries,
+        [DAILY_COUNTER_KEY]: dailyCounter
+      });
+    } catch (e) {
+      console.warn('[WhatsApp Transcriber] Failed to save cache:', e.message);
+    }
+  }
+
+  function cacheGet(msgId) {
+    if (!msgId) return null;
+    const entry = transcriptionCache.get(msgId);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+      transcriptionCache.delete(msgId);
+      return null;
+    }
+    return entry;
+  }
+
+  function cacheSet(msgId, text, provider) {
+    if (!msgId) return;
+    transcriptionCache.set(msgId, { text, provider, timestamp: Date.now() });
+    saveCache();
+  }
+
+  function checkDailyLimit() {
+    const today = getTodayKey();
+    if (dailyCounter.date !== today) {
+      dailyCounter = { date: today, count: 0 };
+    }
+    return dailyCounter.count < DAILY_TRANSCRIPTION_LIMIT;
+  }
+
+  function incrementDailyCounter() {
+    const today = getTodayKey();
+    if (dailyCounter.date !== today) {
+      dailyCounter = { date: today, count: 0 };
+    }
+    dailyCounter.count++;
+    saveCache();
+  }
+
+  function getDailyRemaining() {
+    const today = getTodayKey();
+    if (dailyCounter.date !== today) return DAILY_TRANSCRIPTION_LIMIT;
+    return Math.max(0, DAILY_TRANSCRIPTION_LIMIT - dailyCounter.count);
+  }
 
   // ========== DIAGNOSTIC SYSTEM ==========
   const diagnosticLog = [];
@@ -433,12 +544,22 @@
     }
 
     const msgId = getMessageId(playButton);
+    const cached = cacheGet(msgId);
 
     const transcribeBtn = document.createElement('button');
     transcribeBtn.className = BUTTON_CLASS;
-    transcribeBtn.innerHTML = '📝 Transcribe';
-    transcribeBtn.title = 'Transcribe with OpenAI Whisper';
     transcribeBtn.dataset.msgId = msgId || '';
+
+    if (cached) {
+      transcribeBtn.innerHTML = '✅ Transcribed';
+      transcribeBtn.title = 'Already transcribed (cached)';
+      transcribeBtn.classList.add('success');
+      transcribeBtn.disabled = true;
+    } else {
+      const remaining = getDailyRemaining();
+      transcribeBtn.innerHTML = `📝 Transcribe (${remaining})`;
+      transcribeBtn.title = `Transcribe with OpenAI Whisper — ${remaining} left today`;
+    }
 
     const btnContainer = document.createElement('div');
     btnContainer.className = 'wt-btn-container';
@@ -451,17 +572,47 @@
       messageContainer.appendChild(btnContainer);
     }
 
-    transcribeBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      await handleTranscribeClick(transcribeBtn, messageContainer, playButton);
-    });
+    if (cached) {
+      displayTranscription(messageContainer, cached.text, false, ' (cached)');
+      diagLog('info', 'cache', 'Restored cached transcription', { msgId, textLength: cached.text.length });
+    } else {
+      transcribeBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleTranscribeClick(transcribeBtn, messageContainer, playButton);
+      });
+    }
   }
 
   async function handleTranscribeClick(button, messageContainer, playButton) {
     if (button.disabled) return;
     
     try {
+      const msgId = button.dataset.msgId || getMessageId(playButton);
+
+      // Check in-memory cache first (in case it was populated after button was created)
+      const cached = cacheGet(msgId);
+      if (cached) {
+        displayTranscription(messageContainer, cached.text, false, ' (cached)');
+        button.innerHTML = '✅ Transcribed';
+        button.classList.add('success');
+        button.disabled = true;
+        return;
+      }
+
+      if (!checkDailyLimit()) {
+        const limit = DAILY_TRANSCRIPTION_LIMIT;
+        displayTranscription(messageContainer, `Daily limit reached (${limit}/${limit}). Come back tomorrow!`, true);
+        button.innerHTML = '🔒 Limit';
+        button.classList.add('error');
+        setTimeout(() => {
+          button.disabled = false;
+          button.innerHTML = '🔄 Retry';
+          button.classList.remove('error');
+        }, 5000);
+        return;
+      }
+
       button.disabled = true;
       button.innerHTML = '⏳ Getting audio...';
       button.classList.add('loading');
@@ -475,7 +626,6 @@
         throw new Error('Extension not initialized. Reload the page.');
       }
 
-      const msgId = button.dataset.msgId || getMessageId(playButton);
       if (!msgId) {
         throw new Error('Could not identify the message. Reload the page.');
       }
@@ -503,10 +653,11 @@
       });
 
       if (result.success) {
-        let extraInfo = '';
-        if (result.provider === 'cloudflare' && result.remaining != null) {
-          extraInfo = ` (${result.remaining} free left today)`;
-        }
+        cacheSet(msgId, result.text, result.provider || 'unknown');
+        incrementDailyCounter();
+
+        const remaining = getDailyRemaining();
+        let extraInfo = ` (${remaining} left today)`;
         displayTranscription(messageContainer, result.text, false, extraInfo);
         button.innerHTML = '✅ Transcribed';
         button.classList.remove('loading');
@@ -525,7 +676,8 @@
       
       setTimeout(() => {
         button.disabled = false;
-        button.innerHTML = '🔄 Retry';
+        const remaining = getDailyRemaining();
+        button.innerHTML = `🔄 Retry (${remaining})`;
         button.classList.remove('error');
       }, 3000);
     }
@@ -979,7 +1131,7 @@
     startRecordingObserver();
   }
 
-  function init() {
+  async function init() {
     diagLog('info', 'init', 'Init started', {
       url: window.location.href,
       readyState: document.readyState,
@@ -987,6 +1139,9 @@
       language: navigator.language,
       languages: navigator.languages?.join(', ')
     });
+
+    await loadCache();
+    diagLog('info', 'cache', `Cache ready: ${transcriptionCache.size} entries, ${getDailyRemaining()} transcriptions left today`);
 
     injectScript();
 
@@ -1086,6 +1241,17 @@
         };
       })(),
       
+      // Transcription cache state
+      cache: {
+        entriesInMemory: transcriptionCache.size,
+        dailyUsed: dailyCounter.count,
+        dailyLimit: DAILY_TRANSCRIPTION_LIMIT,
+        dailyRemaining: getDailyRemaining(),
+        dailyDate: dailyCounter.date,
+        maxEntries: MAX_CACHE_ENTRIES,
+        ttlDays: CACHE_TTL_MS / (24 * 60 * 60 * 1000),
+      },
+
       // Injected script diagnostics (try to get)
       injectedScriptStatus: null,
       
