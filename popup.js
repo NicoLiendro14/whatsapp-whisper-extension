@@ -1,6 +1,11 @@
 document.addEventListener('DOMContentLoaded', () => {
   const planCard = document.getElementById('planCard');
 
+  const versionEl = document.getElementById('version');
+  if (versionEl) {
+    versionEl.textContent = 'v' + chrome.runtime.getManifest().version;
+  }
+
   refreshPlanCard();
 
   async function refreshPlanCard() {

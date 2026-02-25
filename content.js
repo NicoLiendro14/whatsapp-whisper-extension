@@ -722,6 +722,8 @@
     }
   }
 
+  const COLLAPSE_THRESHOLD = 200;
+
   function displayTranscription(messageContainer, text, isError = false, extraInfo = '') {
     let resultDiv = messageContainer.querySelector('.' + RESULT_CLASS);
     
@@ -734,15 +736,26 @@
     resultDiv.classList.toggle('error', isError);
     
     const titleSuffix = extraInfo ? `<span class="wt-result-meta">${escapeHtml(extraInfo)}</span>` : '';
+    const isLong = !isError && text.length > COLLAPSE_THRESHOLD;
     
     resultDiv.innerHTML = `
       <div class="wt-result-header">
         <span class="wt-result-icon">${isError ? '⚠️' : '📝'}</span>
         <span class="wt-result-title">${isError ? 'Error' : 'Transcription'}${titleSuffix}</span>
       </div>
-      <div class="wt-result-text">${escapeHtml(text)}</div>
+      <div class="wt-result-text${isLong ? ' wt-collapsed' : ''}">${escapeHtml(text)}</div>
+      ${isLong ? '<button class="wt-toggle-btn">▼ Show more</button>' : ''}
       ${!isError ? '<button class="wt-copy-btn" title="Copy to clipboard">📋 Copy</button>' : ''}
     `;
+
+    const toggleBtn = resultDiv.querySelector('.wt-toggle-btn');
+    if (toggleBtn) {
+      const textDiv = resultDiv.querySelector('.wt-result-text');
+      toggleBtn.addEventListener('click', () => {
+        const collapsed = textDiv.classList.toggle('wt-collapsed');
+        toggleBtn.innerHTML = collapsed ? '▼ Show more' : '▲ Show less';
+      });
+    }
 
     const copyBtn = resultDiv.querySelector('.wt-copy-btn');
     if (copyBtn) {
