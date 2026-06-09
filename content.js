@@ -460,7 +460,7 @@
             });
             
             const audioIcons = document.querySelectorAll('[data-icon="audio-play"], [data-icon="audio-pause"]');
-            const msgContainers = document.querySelectorAll('.message-in, .message-out');
+            const msgContainers = document.querySelectorAll(MESSAGE_CONTAINER_SELECTOR);
             const mainEl = document.querySelector('#main');
             const processedCount = document.querySelectorAll(`[${PROCESSED_ATTR}]`).length;
             
@@ -494,7 +494,8 @@
 
   function getScrollContainer(referenceEl) {
     // Walk up from a message element to find the actual scrollable ancestor
-    let el = referenceEl || document.querySelector('#main .message-in, #main .message-out');
+    let el = referenceEl
+      || document.querySelector('#main .message-in, #main .message-out, #main [data-testid="msg-container"], #main [role="row"]');
     while (el && el !== document.body) {
       const style = window.getComputedStyle(el);
       const overflowY = style.overflowY;
@@ -558,6 +559,24 @@
     }
   }
 
+  // WhatsApp Web periodically restructures its DOM. The old layout used
+  // `.message-in` / `.message-out` classes; newer builds use obfuscated
+  // class names and only expose `data-testid="msg-container"` (and a
+  // `[role="row"]` wrapper). We try every known anchor so the extension keeps
+  // working regardless of which DOM version a given user is on.
+  const MESSAGE_CONTAINER_SELECTOR = [
+    '.message-in',
+    '.message-out',
+    '[data-testid="msg-container"]',
+    '[data-id]',
+    '[role="row"]'
+  ].join(', ');
+
+  function getMessageContainer(playButton) {
+    if (!playButton) return null;
+    return playButton.closest(MESSAGE_CONTAINER_SELECTOR);
+  }
+
   function getMessageId(playButton) {
     const msgElement = playButton.closest('[data-id]');
     if (msgElement) {
@@ -576,9 +595,9 @@
   }
 
   function addTranscribeButton(playButton) {
-    const messageContainer = playButton.closest('.message-in, .message-out');
+    const messageContainer = getMessageContainer(playButton);
     if (!messageContainer) {
-      diagLog('warn', 'button', 'Play button found but no .message-in/.message-out container', {
+      diagLog('warn', 'button', 'Play button found but no message container matched', {
         ariaLabel: playButton.getAttribute('aria-label'),
         parentClasses: playButton.parentElement?.className?.substring(0, 100)
       });
@@ -1204,7 +1223,7 @@
       checkCount++;
       
       const chatIcon = document.querySelector('[data-icon="chat"]');
-      const messages = document.querySelector('.message-in, .message-out');
+      const messages = document.querySelector(MESSAGE_CONTAINER_SELECTOR);
       const mainEl = document.querySelector('#main');
       const isReady = chatIcon || messages || mainEl;
       
@@ -1258,6 +1277,8 @@
         chatIconExists: !!document.querySelector('[data-icon="chat"]'),
         messageInCount: document.querySelectorAll('.message-in').length,
         messageOutCount: document.querySelectorAll('.message-out').length,
+        msgContainerCount: document.querySelectorAll('[data-testid="msg-container"]').length,
+        roleRowCount: document.querySelectorAll('#main [role="row"]').length,
         processedButtons: document.querySelectorAll(`[${PROCESSED_ATTR}]`).length,
         transcribeButtons: document.querySelectorAll('.' + BUTTON_CLASS).length,
         audioPlayIcons: document.querySelectorAll('[data-icon="audio-play"]').length,

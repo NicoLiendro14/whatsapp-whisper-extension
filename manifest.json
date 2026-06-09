@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WhatsApp Audio Transcriber",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Transcribe WhatsApp voice messages instantly — powered by AI",
   
   "icons": {
