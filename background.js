@@ -100,6 +100,7 @@ async function transcribeWithCloudflare(audioData, mimeType, clientId) {
       success: true,
       text: data.text,
       language: data.language,
+      words: data.words,
       provider: 'cloudflare',
       used: data.used,
       limit: data.limit,

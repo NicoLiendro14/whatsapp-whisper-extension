@@ -9,3 +9,10 @@ w.html
 WhatsApp*.html
 screenshots/
 screenshots-v2/
+
+# Wrangler local state (contains Cloudflare account id + email)
+.wrangler/
+worker/.wrangler/
+
+# Working notes, not versioned
+MONETIZACION.md

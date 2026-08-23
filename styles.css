@@ -105,6 +105,32 @@
   word-break: break-word;
 }
 
+/* ── Karaoke word sync (pro) ── */
+
+.wt-result-text.wt-karaoke .wt-w {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 1px;
+  transition: background-color 90ms linear, color 90ms linear;
+}
+
+.wt-result-text.wt-karaoke .wt-w:hover {
+  background: rgba(37, 211, 102, 0.18);
+}
+
+/* Applied cumulatively to everything spoken so far, so it has to stay readable
+   across a whole paragraph — a solid fill with inverted text does not. */
+.wt-result-text.wt-karaoke .wt-w.wt-active {
+  background: rgba(37, 211, 102, 0.32);
+}
+
+/* The highlight must not animate for users who asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .wt-result-text.wt-karaoke .wt-w {
+    transition: none;
+  }
+}
+
 .wt-result-text.wt-collapsed {
   max-height: 4.35em; /* ~3 lines */
   overflow: hidden;

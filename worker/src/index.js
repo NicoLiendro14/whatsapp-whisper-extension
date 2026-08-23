@@ -78,7 +78,10 @@ async function handleTranscribe(request, env) {
     return jsonResponse({
       success: true,
       text: result.text,
-      language: result.language || null,
+      language: result.transcription_info?.language || null,
+      // Word-level timestamps come free in the same inference call. Flattened
+      // out of the per-segment nesting so the client gets one flat timeline.
+      words: result.segments?.flatMap(s => s.words || []) || null,
       used: newUsed,
       limit,
       remaining: limit - newUsed

@@ -33,6 +33,24 @@
   let currentTranscriptionPanel = null;
   let isTranscribing = false;
 
+  // ========== KARAOKE (PRO) STATE ==========
+  const PRO_FLAG_KEY = 'wt_pro';
+  const KARAOKE_OFFSET_KEY = 'wt_karaoke_offset_ms';
+
+  let isPro = false;
+  // whisper-large-v3-turbo aligns words with a 4-layer decoder instead of 32,
+  // so timestamps drift ~150-300ms. User-tunable rather than a magic constant.
+  let karaokeOffsetMs = 0;
+  // Set when the user clicks a WhatsApp play button, so the playback ticks
+  // coming from the MAIN world can be attributed to the right message.
+  // activeWordEls is null until resolved, then a (possibly empty) NodeList.
+  let activeContainer = null;
+  let activeWordEls = null;
+  let activeWordIndex = -1;
+  let lastPlayClickAt = 0;
+  // Seek requested for a message that wasn't loaded yet, applied once it opens.
+  let pendingSeekTime = null;
+
   // ========== CACHE PERSISTENCE ==========
 
   function getTodayKey() {
@@ -41,7 +59,12 @@
 
   async function loadCache() {
     try {
-      const result = await chrome.storage.local.get([CACHE_STORAGE_KEY, DAILY_COUNTER_KEY]);
+      const result = await chrome.storage.local.get([
+        CACHE_STORAGE_KEY, DAILY_COUNTER_KEY, PRO_FLAG_KEY, KARAOKE_OFFSET_KEY
+      ]);
+
+      isPro = !!result[PRO_FLAG_KEY];
+      karaokeOffsetMs = Number(result[KARAOKE_OFFSET_KEY]) || 0;
 
       if (result[CACHE_STORAGE_KEY]) {
         const entries = result[CACHE_STORAGE_KEY];
@@ -105,9 +128,15 @@
     return entry;
   }
 
-  function cacheSet(msgId, text, provider) {
+  function cacheSet(msgId, text, provider, words) {
     if (!msgId) return;
-    transcriptionCache.set(msgId, { text, provider, timestamp: Date.now() });
+    // Stored regardless of the pro flag: words[] roughly 7x's an entry (~400B
+    // -> ~3KB, so ~1.5MB at MAX_CACHE_ENTRIES against a 10MB quota), and
+    // keeping it means enabling pro lights up everything already transcribed
+    // instead of silently requiring a re-transcribe.
+    const entry = { text, provider, timestamp: Date.now() };
+    if (words?.length) entry.words = words;
+    transcriptionCache.set(msgId, entry);
     saveCache();
   }
 
@@ -254,6 +283,30 @@
     if (msg.action === 'recorderStopped') {
       diagLog('info', 'recording', 'Parallel recorder stopped');
       removeTranscriptionPanel();
+    }
+
+    // WhatsApp auto-advances to the next voice note when one finishes. That
+    // playback wasn't started on a button we armed, so we can't attribute it
+    // to a message — drop the highlight rather than sync the wrong text.
+    if (msg.action === 'audioStarted') {
+      if (Date.now() - lastPlayClickAt > 1500) {
+        clearHighlight();
+        activeContainer = null;
+      }
+      // The audio we were waiting on is open now, so the queued jump can land.
+      if (pendingSeekTime !== null) {
+        sendSeek(pendingSeekTime);
+        pendingSeekTime = null;
+      }
+    }
+
+    if (msg.action === 'audioTick') {
+      highlightWordAt(msg.t);
+    }
+
+    // A pause leaves the highlight frozen in place; only a finished audio clears it.
+    if (msg.action === 'audioStopped' && msg.ended) {
+      clearHighlight();
     }
 
     // Handle responses (capturedAudioResult, stopResult)
@@ -594,6 +647,31 @@
     return null;
   }
 
+  // Anything cached before word timestamps existed has text but no words. A pro
+  // user would otherwise be stuck: the button disables on first transcribe, so
+  // there'd be no way to ever get karaoke on already-transcribed messages.
+  function cacheNeedsWords(cached) {
+    return !!(isPro && cached && !cached.words?.length);
+  }
+
+  function applyButtonState(btn, cached) {
+    btn.classList.remove('success');
+    btn.disabled = false;
+
+    if (cacheNeedsWords(cached)) {
+      btn.innerHTML = '✨ Sync words';
+      btn.title = 'Re-transcribe to get word-by-word sync';
+    } else if (cached) {
+      btn.innerHTML = '✅ Transcribed';
+      btn.title = 'Already transcribed';
+      btn.classList.add('success');
+      btn.disabled = true;
+    } else {
+      btn.innerHTML = '📝 Transcribe';
+      btn.title = 'Transcribe voice message';
+    }
+  }
+
   function addTranscribeButton(playButton) {
     const messageContainer = getMessageContainer(playButton);
     if (!messageContainer) {
@@ -611,15 +689,7 @@
     transcribeBtn.className = BUTTON_CLASS;
     transcribeBtn.dataset.msgId = msgId || '';
 
-    if (cached) {
-      transcribeBtn.innerHTML = '✅ Transcribed';
-      transcribeBtn.title = 'Already transcribed';
-      transcribeBtn.classList.add('success');
-      transcribeBtn.disabled = true;
-    } else {
-      transcribeBtn.innerHTML = '📝 Transcribe';
-      transcribeBtn.title = 'Transcribe voice message';
-    }
+    applyButtonState(transcribeBtn, cached);
 
     const btnContainer = document.createElement('div');
     btnContainer.className = 'wt-btn-container';
@@ -632,16 +702,34 @@
       messageContainer.appendChild(btnContainer);
     }
 
+    // Arm the karaoke sync: the playback ticks arriving from the MAIN world
+    // carry no message identity, so we record which message the user started.
+    // Listening on WhatsApp's own button keeps this language-independent.
+    // This same button is also the pause button, so only reset state when the
+    // user actually switches to a different message — otherwise pausing would
+    // wipe the frozen highlight.
+    playButton.addEventListener('click', () => {
+      lastPlayClickAt = Date.now();
+      if (activeContainer === messageContainer) return;
+      clearHighlight();
+      activeContainer = messageContainer;
+      activeWordEls = null;
+      activeWordIndex = -1;
+    });
+
     if (cached) {
-      displayTranscription(messageContainer, cached.text);
+      displayTranscription(messageContainer, cached.text, false, '', cached.words);
       diagLog('info', 'cache', 'Restored cached transcription', { msgId, textLength: cached.text.length });
-    } else {
-      transcribeBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await handleTranscribeClick(transcribeBtn, messageContainer, playButton);
-      });
     }
+
+    // Always wired: handleTranscribeClick already bails on a disabled button,
+    // so applyButtonState alone decides whether clicking does anything. This
+    // matters when toggling pro re-enables a button created while cached.
+    transcribeBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await handleTranscribeClick(transcribeBtn, messageContainer, playButton);
+    });
   }
 
   async function handleTranscribeClick(button, messageContainer, playButton) {
@@ -651,9 +739,11 @@
       const msgId = button.dataset.msgId || getMessageId(playButton);
 
       // Check in-memory cache first (in case it was populated after button was created)
+      // Serve from cache unless we're deliberately re-running to pick up word
+      // timestamps the cached entry predates.
       const cached = cacheGet(msgId);
-      if (cached) {
-        displayTranscription(messageContainer, cached.text);
+      if (cached && !(isPro && !cached.words?.length)) {
+        displayTranscription(messageContainer, cached.text, false, '', cached.words);
         button.innerHTML = '✅ Transcribed';
         button.classList.add('success');
         button.disabled = true;
@@ -713,11 +803,11 @@
       });
 
       if (result.success) {
-        cacheSet(msgId, result.text, result.provider || 'unknown');
+        cacheSet(msgId, result.text, result.provider || 'unknown', result.words);
         incrementDailyCounter();
 
         const remaining = getDailyRemaining();
-        displayTranscription(messageContainer, result.text, false, ` (${remaining} free left today)`);
+        displayTranscription(messageContainer, result.text, false, ` (${remaining} free left today)`, result.words);
         button.innerHTML = '✅ Transcribed';
         button.classList.remove('loading');
         button.classList.add('success');
@@ -743,9 +833,9 @@
 
   const COLLAPSE_THRESHOLD = 200;
 
-  function displayTranscription(messageContainer, text, isError = false, extraInfo = '') {
+  function displayTranscription(messageContainer, text, isError = false, extraInfo = '', words = null) {
     let resultDiv = messageContainer.querySelector('.' + RESULT_CLASS);
-    
+
     if (!resultDiv) {
       resultDiv = document.createElement('div');
       resultDiv.className = RESULT_CLASS;
@@ -753,19 +843,54 @@
     }
 
     resultDiv.classList.toggle('error', isError);
-    
+
     const titleSuffix = extraInfo ? `<span class="wt-result-meta">${escapeHtml(extraInfo)}</span>` : '';
     const isLong = !isError && text.length > COLLAPSE_THRESHOLD;
-    
+    const karaoke = isPro && !isError && words?.length > 0;
+
+    // Karaoke needs each word individually addressable. Without timestamps
+    // (free tier, or an entry cached before this feature) fall through to the
+    // plain escaped text exactly as before.
+    // Whisper emits words with a leading space (" algo"). The container is
+    // pre-wrap, so those would render as doubled gaps — trim and rejoin.
+    const body = karaoke
+      ? words
+          .filter(w => w.word.trim())
+          .map(w => `<span class="wt-w" data-s="${w.start}">${escapeHtml(w.word.trim())}</span>`)
+          .join(' ')
+      : escapeHtml(text);
+
     resultDiv.innerHTML = `
       <div class="wt-result-header">
         <span class="wt-result-icon">${isError ? '⚠️' : '📝'}</span>
         <span class="wt-result-title">${isError ? 'Error' : 'Transcription'}${titleSuffix}</span>
       </div>
-      <div class="wt-result-text${isLong ? ' wt-collapsed' : ''}">${escapeHtml(text)}</div>
+      <div class="wt-result-text${isLong ? ' wt-collapsed' : ''}${karaoke ? ' wt-karaoke' : ''}">${body}</div>
       ${isLong ? '<button class="wt-toggle-btn">▼ Show more</button>' : ''}
       ${!isError ? '<button class="wt-copy-btn" title="Copy to clipboard">📋 Copy</button>' : ''}
     `;
+
+    if (karaoke) {
+      // Click-to-seek. The <audio> lives detached in the MAIN world, so the
+      // seek has to be relayed there.
+      resultDiv.querySelector('.wt-result-text').addEventListener('click', (e) => {
+        const span = e.target.closest('.wt-w');
+        if (!span) return;
+        const time = parseFloat(span.dataset.s);
+
+        // Only one voice message is loaded in the player at a time. Clicking a
+        // word from a different one would seek whatever played last, so start
+        // this message first and queue the jump for when it opens. The play
+        // button is found by our own processed-marker, not by aria-label, so
+        // this stays language-independent.
+        if (activeContainer !== messageContainer) {
+          pendingSeekTime = time;
+          messageContainer.querySelector(`[${PROCESSED_ATTR}]`)?.click();
+          return;
+        }
+        sendSeek(time);
+      });
+    }
 
     const toggleBtn = resultDiv.querySelector('.wt-toggle-btn');
     if (toggleBtn) {
@@ -788,6 +913,78 @@
         }
       });
     }
+  }
+
+  // ========== KARAOKE HIGHLIGHT ==========
+  // Driven by audioTick messages from injected-early.js, which owns the only
+  // reference to WhatsApp's detached <audio> element.
+
+  function highlightWordAt(t) {
+    if (!activeContainer) return;
+
+    if (activeWordEls === null) {
+      activeWordEls = activeContainer.querySelectorAll('.wt-result-text.wt-karaoke .wt-w');
+    }
+    if (!activeWordEls.length) return;
+
+    const ts = t + karaokeOffsetMs / 1000;
+
+    // Starts are ascending, so the scan bails at the first word not yet reached.
+    let idx = -1;
+    for (let i = 0; i < activeWordEls.length; i++) {
+      if (parseFloat(activeWordEls[i].dataset.s) <= ts) idx = i;
+      else break;
+    }
+
+    // Only touch the DOM when the active word actually changes, not every frame.
+    if (idx === activeWordIndex) return;
+
+    // Everything already spoken stays lit, so the edge of the highlight is
+    // itself the playhead. Only the words that crossed the edge get touched,
+    // which keeps a seek backwards as cheap as normal playback.
+    if (idx > activeWordIndex) {
+      for (let i = activeWordIndex + 1; i <= idx; i++) activeWordEls[i]?.classList.add('wt-active');
+    } else {
+      for (let i = activeWordIndex; i > idx; i--) activeWordEls[i]?.classList.remove('wt-active');
+    }
+    activeWordIndex = idx;
+  }
+
+  function clearHighlight() {
+    activeWordEls?.forEach(el => el.classList.remove('wt-active'));
+    activeWordIndex = -1;
+  }
+
+  function sendSeek(time) {
+    window.postMessage({ source: 'wt-content-script', action: 'seekAudio', time }, '*');
+  }
+
+  // The popup can flip these while the page is open; without this the user
+  // toggles pro and nothing happens until a reload.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes[PRO_FLAG_KEY]) {
+      isPro = !!changes[PRO_FLAG_KEY].newValue;
+      diagLog('info', 'karaoke', `Pro ${isPro ? 'enabled' : 'disabled'} — rerendering transcriptions`);
+      rerenderTranscriptions();
+    }
+    if (changes[KARAOKE_OFFSET_KEY]) {
+      karaokeOffsetMs = Number(changes[KARAOKE_OFFSET_KEY].newValue) || 0;
+    }
+  });
+
+  // Repaint every visible transcription so the pro toggle takes effect on the
+  // spot. Each transcribe button already carries its own msgId.
+  function rerenderTranscriptions() {
+    clearHighlight();
+    activeWordEls = null;
+    document.querySelectorAll('.' + BUTTON_CLASS).forEach(btn => {
+      const container = getMessageContainer(btn);
+      const cached = cacheGet(btn.dataset.msgId);
+      if (!container || !cached) return;
+      displayTranscription(container, cached.text, false, '', cached.words);
+      applyButtonState(btn, cached);
+    });
   }
 
   function sendMessageToBackground(message) {

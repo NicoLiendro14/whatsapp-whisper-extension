@@ -112,6 +112,50 @@
     .how-to strong {
       color: #075e54;
     }
+
+    .pro-section {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid #eee;
+    }
+
+    .pro-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #075e54;
+    }
+
+    .pro-hint {
+      font-size: 11px;
+      color: #888;
+      line-height: 1.5;
+      margin-top: 6px;
+    }
+
+    .offset-row {
+      margin-top: 12px;
+    }
+
+    .offset-row.hidden {
+      display: none;
+    }
+
+    .offset-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+
+    .offset-row input[type="range"] {
+      width: 100%;
+      accent-color: #25d366;
+    }
   </style>
 </head>
 <body>
@@ -121,8 +165,24 @@
 
     <div id="planCard" class="plan-card loading">Loading...</div>
 
+    <div class="pro-section">
+      <label class="pro-row">
+        <span>✨ Karaoke word sync</span>
+        <input type="checkbox" id="proToggle">
+      </label>
+      <div class="pro-hint">Highlights each word as the voice message plays. Click any word to jump there.</div>
+
+      <div class="offset-row hidden" id="offsetRow">
+        <div class="offset-label">
+          <span>Sync offset</span>
+          <span id="offsetValue">0 ms</span>
+        </div>
+        <input type="range" id="offsetSlider" min="-500" max="500" step="25" value="0">
+      </div>
+    </div>
+
     <div class="how-to">
-      <strong>How to use:</strong> Open any WhatsApp chat and click the 
+      <strong>How to use:</strong> Open any WhatsApp chat and click the
       <strong>📝 Transcribe</strong> button on any voice message.
     </div>
   </div>

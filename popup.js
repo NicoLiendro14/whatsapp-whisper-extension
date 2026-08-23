@@ -7,6 +7,36 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   refreshPlanCard();
+  setupProControls();
+
+  // ponytail: local flag only — a gate with no auth is decorative. Real
+  // licensing (key + worker validation) is a separate piece of work.
+  function setupProControls() {
+    const proToggle = document.getElementById('proToggle');
+    const offsetRow = document.getElementById('offsetRow');
+    const offsetSlider = document.getElementById('offsetSlider');
+    const offsetValue = document.getElementById('offsetValue');
+
+    chrome.storage.local.get(['wt_pro', 'wt_karaoke_offset_ms'], (res) => {
+      const on = !!res.wt_pro;
+      const offset = Number(res.wt_karaoke_offset_ms) || 0;
+      proToggle.checked = on;
+      offsetRow.classList.toggle('hidden', !on);
+      offsetSlider.value = offset;
+      offsetValue.textContent = `${offset} ms`;
+    });
+
+    proToggle.addEventListener('change', () => {
+      chrome.storage.local.set({ wt_pro: proToggle.checked });
+      offsetRow.classList.toggle('hidden', !proToggle.checked);
+    });
+
+    offsetSlider.addEventListener('input', () => {
+      const v = Number(offsetSlider.value);
+      offsetValue.textContent = `${v} ms`;
+      chrome.storage.local.set({ wt_karaoke_offset_ms: v });
+    });
+  }
 
   async function refreshPlanCard() {
     const [providerInfo, usage] = await Promise.all([

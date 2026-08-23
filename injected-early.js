@@ -120,6 +120,55 @@
     }
   }
 
+  // ── Voice message playback clock (for word-level karaoke sync) ──
+  // WhatsApp plays voice messages through an <audio> element created with
+  // new Audio() that it never inserts into the DOM. It stays detached, so the
+  // content script (isolated world) cannot reach it by any DOM query. The only
+  // handle on it is intercepting play() here in the MAIN world.
+
+  // Kept past the end of playback so a click-to-seek still has something to
+  // seek while the audio sits paused. tickRaf is the "currently ticking" flag.
+  let mediaEl = null;
+  let tickRaf = null;
+
+  function postTick() {
+    window.postMessage({
+      source: 'wt-early-patch',
+      action: 'audioTick',
+      t: mediaEl.currentTime,
+      d: mediaEl.duration
+    }, '*');
+  }
+
+  function stopTicking(ended) {
+    if (tickRaf) cancelAnimationFrame(tickRaf);
+    tickRaf = null;
+    // Pause freezes the highlight where it is; only a real end clears it.
+    window.postMessage({ source: 'wt-early-patch', action: 'audioStopped', ended: !!ended }, '*');
+  }
+
+  function tick() {
+    if (!mediaEl) return;
+    if (mediaEl.ended) { stopTicking(true); return; }
+    if (mediaEl.paused) { stopTicking(false); return; }
+    // currentTime is media time, so playbackRate (WhatsApp's 1×/1.5×/2×
+    // control) is already baked in — nothing to compensate for.
+    postTick();
+    tickRaf = requestAnimationFrame(tick);
+  }
+
+  const originalPlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function() {
+    if (this.tagName === 'AUDIO') {
+      if (tickRaf) cancelAnimationFrame(tickRaf);
+      mediaEl = this;
+      this.addEventListener('ended', () => stopTicking(true), { once: true });
+      window.postMessage({ source: 'wt-early-patch', action: 'audioStarted' }, '*');
+      tickRaf = requestAnimationFrame(tick);
+    }
+    return originalPlay.apply(this, arguments);
+  };
+
   // Listen for requests from the content script
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
@@ -128,6 +177,26 @@
 
     if (msg.action === 'getCapturedAudio') {
       handleGetCapturedAudio(msg.requestId);
+    }
+
+    // Click-to-seek: the content script can't touch the detached element, so
+    // it asks us to move the playhead. WhatsApp's own UI listens to this
+    // element's events, so driving it directly keeps its button and waveform
+    // in sync — no need to fake clicks on its controls.
+    if (msg.action === 'seekAudio' && mediaEl) {
+      const el = mediaEl;
+      const applySeek = () => {
+        try {
+          el.currentTime = msg.time;
+          postTick(); // repaint the highlight even if we stay paused
+          // Moving the playhead of a paused audio is silent, which reads as
+          // "the click did nothing". Resume so the jump is audible.
+          if (el.paused) el.play();
+        } catch (e) { /* not seekable */ }
+      };
+      // Seeking before metadata is in throws; wait for it when just started.
+      if (el.readyState >= 1) applySeek();
+      else el.addEventListener('loadedmetadata', applySeek, { once: true });
     }
 
     if (msg.action === 'stopParallelRecording') {
