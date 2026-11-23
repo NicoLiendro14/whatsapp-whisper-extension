@@ -803,6 +803,12 @@
       });
 
       if (result.success) {
+        // The server decides pro, not us. Keep the local mirror fresh so an
+        // expired subscription stops rendering karaoke without a popup visit.
+        if (typeof result.pro === 'boolean' && result.pro !== isPro) {
+          chrome.storage.local.set({ wt_pro: result.pro });
+        }
+
         cacheSet(msgId, result.text, result.provider || 'unknown', result.words);
         incrementDailyCounter();
 

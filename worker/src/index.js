@@ -1,11 +1,59 @@
 import { Buffer } from 'node:buffer';
 
 const DAILY_LIMIT_FREE = 30;
+const DAILY_LIMIT_PRO = 500;
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Client-ID',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Client-ID, X-License-Key',
 };
+
+// ── Licensing ──
+// Polar is the merchant of record and owns the subscription lifecycle, so a
+// cancelled or refunded subscription simply stops validating. The cache TTL is
+// how long a revoked key keeps working, not a correctness window.
+
+async function checkLicense(env, key) {
+  if (!key || !env.POLAR_TOKEN) return false;
+
+  const cacheKey = `lic:${key}`;
+  const cached = await env.RATE_LIMIT.get(cacheKey);
+  if (cached !== null) return cached === '1';
+
+  let granted = false;
+  try {
+    const r = await fetch(`${env.POLAR_API_BASE}/v1/license-keys/validate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.POLAR_TOKEN}`
+      },
+      body: JSON.stringify({ key, organization_id: env.POLAR_ORG_ID })
+    });
+    const data = await r.json().catch(() => null);
+    granted = r.ok && data?.status === 'granted';
+  } catch (err) {
+    // Polar unreachable: fail closed to the free tier rather than handing out
+    // pro limits, but don't cache the outcome — it isn't an answer about the key.
+    console.error('License validation failed:', err);
+    return false;
+  }
+
+  // Negative answers are cached briefly so a typo'd key can't hammer Polar.
+  await env.RATE_LIMIT.put(cacheKey, granted ? '1' : '0', {
+    expirationTtl: granted ? 86400 : 600
+  });
+  return granted;
+}
+
+// Pro quota follows the licence, not the device: ten people sharing one key
+// share one budget, so sharing throttles itself instead of multiplying cost.
+function usageKey(clientId, licenseKey) {
+  const today = new Date().toISOString().slice(0, 10);
+  return licenseKey
+    ? `usage:lic:${licenseKey}:${today}`
+    : `usage:${clientId}:${today}`;
+}
 
 export default {
   async fetch(request, env) {
@@ -37,12 +85,19 @@ async function handleTranscribe(request, env) {
     return jsonResponse({ error: 'Missing or invalid client ID' }, 401);
   }
 
-  const { used, limit, remaining } = await getUsage(env, clientId);
+  const licenseKey = request.headers.get('X-License-Key');
+  const isPro = await checkLicense(env, licenseKey);
+  const key = usageKey(clientId, isPro ? licenseKey : null);
+
+  const { used, limit, remaining } = await getUsage(env, key, isPro);
 
   if (remaining <= 0) {
     return jsonResponse({
-      error: 'Daily limit reached. Add your own OpenAI API key for unlimited transcriptions.',
+      error: isPro
+        ? `Monthly limit reached (${limit}). Get in touch if you need more.`
+        : 'Daily free limit reached. Upgrade to Pro for more transcriptions.',
       code: 'DAILY_LIMIT',
+      pro: isPro,
       used,
       limit,
       remaining: 0
@@ -73,15 +128,18 @@ async function handleTranscribe(request, env) {
       audio: base64,
     });
 
-    const newUsed = await incrementUsage(env, clientId);
+    const newUsed = await incrementUsage(env, key);
+
+    // Word timestamps are the paid feature, so they are withheld here rather
+    // than hidden in the UI - without a licence the data never leaves the server.
+    const words = result.segments?.flatMap(s => s.words || []) || [];
 
     return jsonResponse({
       success: true,
       text: result.text,
       language: result.transcription_info?.language || null,
-      // Word-level timestamps come free in the same inference call. Flattened
-      // out of the per-segment nesting so the client gets one flat timeline.
-      words: result.segments?.flatMap(s => s.words || []) || null,
+      words: isPro && words.length ? words : null,
+      pro: isPro,
       used: newUsed,
       limit,
       remaining: limit - newUsed
@@ -102,24 +160,25 @@ async function handleUsage(request, env) {
     return jsonResponse({ error: 'Missing or invalid client ID' }, 401);
   }
 
-  const usage = await getUsage(env, clientId);
-  return jsonResponse(usage);
+  const licenseKey = request.headers.get('X-License-Key');
+  const isPro = await checkLicense(env, licenseKey);
+
+  const usage = await getUsage(env, usageKey(clientId, isPro ? licenseKey : null), isPro);
+  // The popup mirrors this: pro status is decided here, never client-side.
+  return jsonResponse({ ...usage, pro: isPro });
 }
 
-async function getUsage(env, clientId) {
-  const today = new Date().toISOString().slice(0, 10);
-  const key = `usage:${clientId}:${today}`;
+async function getUsage(env, key, isPro = false) {
+  const limit = isPro ? DAILY_LIMIT_PRO : DAILY_LIMIT_FREE;
   const used = parseInt(await env.RATE_LIMIT.get(key) || '0');
   return {
     used,
-    limit: DAILY_LIMIT_FREE,
-    remaining: Math.max(0, DAILY_LIMIT_FREE - used)
+    limit,
+    remaining: Math.max(0, limit - used)
   };
 }
 
-async function incrementUsage(env, clientId) {
-  const today = new Date().toISOString().slice(0, 10);
-  const key = `usage:${clientId}:${today}`;
+async function incrementUsage(env, key) {
   const current = parseInt(await env.RATE_LIMIT.get(key) || '0');
   const newCount = current + 1;
   await env.RATE_LIMIT.put(key, String(newCount), { expirationTtl: 86400 });

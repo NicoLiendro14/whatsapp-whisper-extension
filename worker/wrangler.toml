@@ -6,6 +6,13 @@ compatibility_flags = ["nodejs_compat"]
 [ai]
 binding = "AI"
 
+# Polar (merchant of record). POLAR_TOKEN is a secret, set with:
+#   npx wrangler secret put POLAR_TOKEN
+# Swap these two for the production org id and https://api.polar.sh when going live.
+[vars]
+POLAR_API_BASE = "https://sandbox-api.polar.sh"
+POLAR_ORG_ID = "9e80fd12-1120-4ce2-aa1e-41ae81a3e76e"
+
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
 id = "3cf4314ecac241879fba52c275a31759"

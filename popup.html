@@ -140,7 +140,7 @@
       margin-top: 12px;
     }
 
-    .offset-row.hidden {
+    .hidden {
       display: none;
     }
 
@@ -156,6 +156,79 @@
       width: 100%;
       accent-color: #25d366;
     }
+
+    .pro-cta {
+      display: block;
+      margin-top: 10px;
+      padding: 9px;
+      border-radius: 8px;
+      background: #25d366;
+      color: #fff;
+      text-align: center;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .pro-cta:hover { background: #1fb959; }
+
+    .license-entry {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .license-entry input {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 9px;
+      border: 1px solid #dfe3e6;
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+
+    .license-entry button {
+      padding: 7px 12px;
+      border: 0;
+      border-radius: 8px;
+      background: #075e54;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .license-entry button:disabled { opacity: 0.6; cursor: default; }
+
+    .license-msg {
+      margin-top: 8px;
+      font-size: 11px;
+      line-height: 1.5;
+      min-height: 1em;
+    }
+
+    .license-msg.ok { color: #128c7e; }
+    .license-msg.err { color: #dc3545; }
+
+    .pro-badge-on {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      background: #25d366;
+      color: #fff;
+      margin-left: 6px;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0);
+      white-space: nowrap; border: 0;
+    }
   </style>
 </head>
 <body>
@@ -166,15 +239,27 @@
     <div id="planCard" class="plan-card loading">Loading...</div>
 
     <div class="pro-section">
-      <label class="pro-row">
-        <span>✨ Karaoke word sync</span>
-        <input type="checkbox" id="proToggle">
-      </label>
-      <div class="pro-hint">Highlights each word as the voice message plays. Click any word to jump there.</div>
+      <div class="pro-row">
+        <span id="proStatus">Free plan</span>
+      </div>
+      <div class="pro-hint" id="proHint">
+        Pro adds word-by-word karaoke sync, click-to-seek and 500 transcriptions a month.
+      </div>
+
+      <div id="licenseForm">
+        <a class="pro-cta" id="getProLink" href="#" target="_blank" rel="noopener">Get Pro</a>
+        <div class="license-entry">
+          <label class="sr-only" for="licenseInput">License key</label>
+          <input type="text" id="licenseInput" placeholder="Already have a key? Paste it">
+          <button id="activateBtn" type="button">Activate</button>
+        </div>
+      </div>
+
+      <div class="license-msg" id="licenseMsg"></div>
 
       <div class="offset-row hidden" id="offsetRow">
         <div class="offset-label">
-          <span>Sync offset</span>
+          <label for="offsetSlider">Sync offset</label>
           <span id="offsetValue">0 ms</span>
         </div>
         <input type="range" id="offsetSlider" min="-500" max="500" step="25" value="0">
