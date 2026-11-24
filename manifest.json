@@ -12,9 +12,7 @@
   },
   
   "permissions": [
-    "storage",
-    "activeTab",
-    "scripting"
+    "storage"
   ],
   
   "action": {

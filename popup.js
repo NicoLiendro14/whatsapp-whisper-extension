@@ -28,7 +28,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Render from the last known state first so the popup never flashes empty,
     // then let the server's verdict correct it.
-    chrome.storage.local.get(['wt_pro', 'wt_license_key', 'wt_karaoke_offset_ms'], (res) => {
+    const styleSelect = document.getElementById('styleSelect');
+    styleSelect.addEventListener('change', () => {
+      chrome.storage.local.set({ wt_karaoke_style: styleSelect.value });
+    });
+
+    chrome.storage.local.get(['wt_pro', 'wt_license_key', 'wt_karaoke_offset_ms', 'wt_karaoke_style'], (res) => {
+      styleSelect.value = res.wt_karaoke_style || 'sweep';
       const offset = Number(res.wt_karaoke_offset_ms) || 0;
       offsetSlider.value = offset;
       offsetValue.textContent = `${offset} ms`;
@@ -42,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : 'Free plan';
       proHint.textContent = isPro
         ? 'Karaoke sync and click-to-seek are on. Play any transcribed voice message.'
-        : 'Pro adds word-by-word karaoke sync, click-to-seek and 500 transcriptions a month.';
+        : 'Pro adds word-by-word karaoke sync, click-to-seek and 500 transcriptions a day.';
       licenseForm.classList.toggle('hidden', isPro);
       offsetRow.classList.toggle('hidden', !isPro);
     }
@@ -113,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     planCard.innerHTML = `
       <div class="plan-title">
-        <span class="plan-badge">FREE</span>
+        <span class="plan-badge${usage?.pro ? ' pro' : ''}">${usage?.pro ? 'PRO' : 'FREE'}</span>
         ${remaining} transcriptions left today
       </div>
       <div class="usage-bar"><div class="usage-fill ${fillClass}" style="width:${pct}%"></div></div>

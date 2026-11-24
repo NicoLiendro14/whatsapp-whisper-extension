@@ -28,6 +28,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'openPopup') {
+    // A tab, not chrome.action.openPopup(): that one rejects ("Failed to open
+    // popup") whenever the window isn't focused just so, even mid-click.
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+    return;
+  }
+
   if (message.action === 'getUsage') {
     getCloudflareUsage()
       .then(usage => sendResponse(usage))

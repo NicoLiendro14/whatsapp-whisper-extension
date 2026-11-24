@@ -281,6 +281,24 @@
       }, '*');
     }
 
+    // The content script matches a started <audio> to its voice note by
+    // duration; the model's (seconds) doesn't depend on WhatsApp's DOM markup.
+    if (message.action === 'getDurations') {
+      const durations = {};
+      for (const id of message.msgIds || []) {
+        // A throw here would leave attributeAudio waiting out the 30s timeout.
+        let d;
+        try { d = Number(getMessageModel(id)?.duration); } catch (e) { /* unknown */ }
+        if (d > 0) durations[id] = d;
+      }
+      window.postMessage({
+        source: 'wt-injected-script',
+        action: 'durations',
+        requestId: message.requestId,
+        durations
+      }, '*');
+    }
+
     if (message.action === 'getDiagnostics') {
       // Collect detailed diagnostics from the injected script context
       let requireInfo = 'unknown';

@@ -94,7 +94,7 @@ async function handleTranscribe(request, env) {
   if (remaining <= 0) {
     return jsonResponse({
       error: isPro
-        ? `Monthly limit reached (${limit}). Get in touch if you need more.`
+        ? `Daily limit reached (${limit}). Get in touch if you need more.`
         : 'Daily free limit reached. Upgrade to Pro for more transcriptions.',
       code: 'DAILY_LIMIT',
       pro: isPro,

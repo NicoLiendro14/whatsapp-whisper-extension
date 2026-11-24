@@ -77,6 +77,8 @@
       background: #007bff;
     }
 
+    .plan-badge.pro { background: #25d366; }
+
     .usage-bar {
       height: 8px;
       background: rgba(0,0,0,0.08);
@@ -150,6 +152,24 @@
       font-size: 11px;
       color: #666;
       margin-bottom: 4px;
+    }
+
+    .settings-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #075e54;
+      margin-bottom: 8px;
+    }
+
+    .offset-row select {
+      width: 100%;
+      padding: 6px 8px;
+      margin-bottom: 10px;
+      border: 1px solid #dfe3e6;
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: inherit;
+      background: #fff;
     }
 
     .offset-row input[type="range"] {
@@ -243,7 +263,7 @@
         <span id="proStatus">Free plan</span>
       </div>
       <div class="pro-hint" id="proHint">
-        Pro adds word-by-word karaoke sync, click-to-seek and 500 transcriptions a month.
+        Pro adds word-by-word karaoke sync, click-to-seek and 500 transcriptions a day.
       </div>
 
       <div id="licenseForm">
@@ -258,6 +278,15 @@
       <div class="license-msg" id="licenseMsg"></div>
 
       <div class="offset-row hidden" id="offsetRow">
+        <div class="settings-title">Karaoke settings</div>
+        <div class="offset-label">
+          <label for="styleSelect">Highlight style</label>
+        </div>
+        <select id="styleSelect">
+          <option value="sweep">Progressive sweep</option>
+          <option value="word">Active word</option>
+          <option value="off">No effect</option>
+        </select>
         <div class="offset-label">
           <label for="offsetSlider">Sync offset</label>
           <span id="offsetValue">0 ms</span>

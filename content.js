@@ -16,7 +16,9 @@
   const CACHE_STORAGE_KEY = 'wt_transcription_cache';
   const MAX_CACHE_ENTRIES = 500;
   const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-  const DAILY_TRANSCRIPTION_LIMIT = 30;
+  // Mirrors the Worker limits so the local check never blocks a Pro user at
+  // the free cap. The Worker stays the authority.
+  const dailyLimit = () => (isPro ? 500 : 30);
   const DAILY_COUNTER_KEY = 'wt_daily_counter';
 
   const transcriptionCache = new Map();
@@ -36,20 +38,41 @@
   // ========== KARAOKE (PRO) STATE ==========
   const PRO_FLAG_KEY = 'wt_pro';
   const KARAOKE_OFFSET_KEY = 'wt_karaoke_offset_ms';
+  const KARAOKE_STYLE_KEY = 'wt_karaoke_style';
+
+  // 'sweep' | 'word' | 'off'. Lives on <html> so styles.css picks the look and
+  // a change from the popup restyles every transcription without a rerender.
+  let karaokeStyle = 'sweep';
+  function applyKaraokeStyle(value) {
+    karaokeStyle = value === 'word' || value === 'off' ? value : 'sweep';
+    document.documentElement.dataset.wtKaraoke = karaokeStyle;
+  }
+  applyKaraokeStyle();
 
   let isPro = false;
   // whisper-large-v3-turbo aligns words with a 4-layer decoder instead of 32,
   // so timestamps drift ~150-300ms. User-tunable rather than a magic constant.
   let karaokeOffsetMs = 0;
-  // Set when the user clicks a WhatsApp play button, so the playback ticks
-  // coming from the MAIN world can be attributed to the right message.
-  // activeWordEls is null until resolved, then a (possibly empty) NodeList.
-  let activeContainer = null;
+  // The message the highlighted audio belongs to, and that audio's id from
+  // injected-early.js. An ID rather than the node, because WhatsApp drops and
+  // rebuilds message nodes as the chat scrolls.
+  // activeWordEls is null until resolved, then a non-empty NodeList.
+  let activeMsgId = null;
+  let activeAudioId = null;
+  // When the active audio ended, 0 while it hasn't: only a fresh end means
+  // WhatsApp is auto-advancing, a stale one would let any later sound match.
+  let activeEndedAt = 0;
+  // The notes after the active one, read when it started, in case its node
+  // is gone (scrolled away) by the time it ends.
+  let activeNextIds = [];
   let activeWordEls = null;
   let activeWordIndex = -1;
+  // The last play button clicked, a hint for which message the next audio is.
   let lastPlayClickAt = 0;
-  // Seek requested for a message that wasn't loaded yet, applied once it opens.
-  let pendingSeekTime = null;
+  let lastPlayClickMsgId = null;
+  // Seek requested for a message that wasn't loaded yet, applied once its
+  // audio starts — or dropped, so a stale one can't land minutes later.
+  let pendingSeek = null; // { msgId, time, expiry }
 
   // ========== CACHE PERSISTENCE ==========
 
@@ -60,11 +83,12 @@
   async function loadCache() {
     try {
       const result = await chrome.storage.local.get([
-        CACHE_STORAGE_KEY, DAILY_COUNTER_KEY, PRO_FLAG_KEY, KARAOKE_OFFSET_KEY
+        CACHE_STORAGE_KEY, DAILY_COUNTER_KEY, PRO_FLAG_KEY, KARAOKE_OFFSET_KEY, KARAOKE_STYLE_KEY
       ]);
 
       isPro = !!result[PRO_FLAG_KEY];
       karaokeOffsetMs = Number(result[KARAOKE_OFFSET_KEY]) || 0;
+      applyKaraokeStyle(result[KARAOKE_STYLE_KEY]);
 
       if (result[CACHE_STORAGE_KEY]) {
         const entries = result[CACHE_STORAGE_KEY];
@@ -77,6 +101,9 @@
           }
         }
         console.log(`[WhatsApp Transcriber] Cache loaded: ${loaded} transcriptions`);
+        // Write back without the expired ones, so they leave disk after 7 days
+        // even if nothing new gets transcribed.
+        if (loaded < Object.keys(entries).length) saveCache();
       }
 
       const today = getTodayKey();
@@ -91,30 +118,43 @@
   }
 
   async function saveCache() {
-    try {
-      const entries = {};
-      const now = Date.now();
-      for (const [msgId, entry] of transcriptionCache) {
-        if (now - entry.timestamp < CACHE_TTL_MS) {
-          entries[msgId] = entry;
-        }
+    const entries = {};
+    const now = Date.now();
+    for (const [msgId, entry] of transcriptionCache) {
+      if (now - entry.timestamp < CACHE_TTL_MS) {
+        entries[msgId] = entry;
       }
-
-      const keys = Object.keys(entries);
-      if (keys.length > MAX_CACHE_ENTRIES) {
-        const sorted = keys.sort((a, b) => entries[a].timestamp - entries[b].timestamp);
-        for (let i = 0; i < sorted.length - MAX_CACHE_ENTRIES; i++) {
-          delete entries[sorted[i]];
-        }
-      }
-
-      await chrome.storage.local.set({
-        [CACHE_STORAGE_KEY]: entries,
-        [DAILY_COUNTER_KEY]: dailyCounter
-      });
-    } catch (e) {
-      console.warn('[WhatsApp Transcriber] Failed to save cache:', e.message);
     }
+
+    // Oldest first, so every trim below drops the oldest. Dropped from memory
+    // too, or the next save would hit the same full storage again.
+    const keys = Object.keys(entries).sort((a, b) => entries[a].timestamp - entries[b].timestamp);
+    const evict = (n) => keys.splice(0, n).forEach(k => {
+      delete entries[k];
+      transcriptionCache.delete(k);
+    });
+    evict(keys.length - MAX_CACHE_ENTRIES);
+
+    for (;;) {
+      try {
+        await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: entries });
+        return;
+      } catch (e) {
+        // Full storage would otherwise fail every save from now on.
+        if (!/quota/i.test(e.message) || !keys.length) {
+          console.warn('[WhatsApp Transcriber] Failed to save cache:', e.message);
+          return;
+        }
+        evict(Math.ceil(keys.length / 4));
+      }
+    }
+  }
+
+  // Its own write, so a cache write failing on quota can't lose the count.
+  function saveDailyCounter() {
+    chrome.storage.local.set({ [DAILY_COUNTER_KEY]: dailyCounter }).catch(e => {
+      console.warn('[WhatsApp Transcriber] Failed to save daily counter:', e.message);
+    });
   }
 
   function cacheGet(msgId) {
@@ -145,7 +185,7 @@
     if (dailyCounter.date !== today) {
       dailyCounter = { date: today, count: 0 };
     }
-    return dailyCounter.count < DAILY_TRANSCRIPTION_LIMIT;
+    return dailyCounter.count < dailyLimit();
   }
 
   function incrementDailyCounter() {
@@ -154,13 +194,13 @@
       dailyCounter = { date: today, count: 0 };
     }
     dailyCounter.count++;
-    saveCache();
+    saveDailyCounter();
   }
 
   function getDailyRemaining() {
     const today = getTodayKey();
-    if (dailyCounter.date !== today) return DAILY_TRANSCRIPTION_LIMIT;
-    return Math.max(0, DAILY_TRANSCRIPTION_LIMIT - dailyCounter.count);
+    if (dailyCounter.date !== today) return dailyLimit();
+    return Math.max(0, dailyLimit() - dailyCounter.count);
   }
 
   // ========== DIAGNOSTIC SYSTEM ==========
@@ -245,7 +285,7 @@
       }
     }
 
-    if (message.action === 'storeStatus' && message.requestId) {
+    if ((message.action === 'storeStatus' || message.action === 'durations') && message.requestId) {
       const resolver = pendingRequests.get(message.requestId);
       if (resolver) {
         pendingRequests.delete(message.requestId);
@@ -285,27 +325,45 @@
       removeTranscriptionPanel();
     }
 
-    // WhatsApp auto-advances to the next voice note when one finishes. That
-    // playback wasn't started on a button we armed, so we can't attribute it
-    // to a message — drop the highlight rather than sync the wrong text.
-    if (msg.action === 'audioStarted') {
-      if (Date.now() - lastPlayClickAt > 1500) {
+    // Same id means a resume, or the play() our own seek triggers — keep going.
+    if (msg.action === 'audioStarted' && msg.id === activeAudioId) {
+      activeEndedAt = 0;
+      lastPlayClickAt = 0; // a resume click is consumed too, or an auto-advance could reuse it
+      // The playhead may have moved while paused, unseen; repaint from clean.
+      clearHighlight();
+      activeWordEls = null; // re-resolve, which re-opens a text collapsed while paused
+    } else if (msg.action === 'audioStarted') {
+      const audioId = msg.id;
+      attributeAudio(msg.d).then(msgId => {
+        // No matching voice note: a notification sound or similar. Leave the
+        // karaoke alone rather than sync the wrong text.
+        if (!msgId) return;
+        lastPlayClickAt = 0; // consumed, so an auto-advance can't reuse it
+        // Reset even for the same message: a replay must re-open a text the
+        // user collapsed, and highlightWordAt only does that on resolving.
         clearHighlight();
-        activeContainer = null;
-      }
-      // The audio we were waiting on is open now, so the queued jump can land.
-      if (pendingSeekTime !== null) {
-        sendSeek(pendingSeekTime);
-        pendingSeekTime = null;
-      }
+        activeMsgId = msgId;
+        activeNextIds = nextVoiceIds(msgId);
+        activeWordEls = null;
+        activeAudioId = audioId;
+        activeEndedAt = 0;
+        // The audio we were waiting on is open now, so the queued jump can land.
+        if (pendingSeek && Date.now() > pendingSeek.expiry) pendingSeek = null;
+        if (pendingSeek?.msgId === msgId) {
+          sendSeek(audioId, pendingSeek.time);
+          pendingSeek = null;
+        }
+      });
     }
 
-    if (msg.action === 'audioTick') {
+    if (msg.action === 'audioTick' && msg.id === activeAudioId) {
       highlightWordAt(msg.t);
     }
 
-    // A pause leaves the highlight frozen in place; only a finished audio clears it.
-    if (msg.action === 'audioStopped' && msg.ended) {
+    // A pause leaves the highlight frozen in place; only a finished audio clears
+    // it. Checking the id keeps an old audio's end from clearing the current one.
+    if (msg.action === 'audioStopped' && msg.ended && msg.id === activeAudioId) {
+      activeEndedAt = Date.now();
       clearHighlight();
     }
 
@@ -563,52 +621,57 @@
   function processBatch(buttons, startIndex) {
     const endIndex = Math.min(startIndex + BATCH_SIZE, buttons.length);
     let processed = 0;
+    let more = false;
+    // Later batches run from rAF, outside the scan's try. A throw there would
+    // leave isScanning stuck and no button would ever be added again.
+    try {
+      const scroller = getScrollContainer(buttons[startIndex]);
+      const prevScrollTop = scroller ? scroller.scrollTop : 0;
+      const prevScrollHeight = scroller ? scroller.scrollHeight : 0;
 
-    const scroller = getScrollContainer(buttons[startIndex]);
-    const prevScrollTop = scroller ? scroller.scrollTop : 0;
-    const prevScrollHeight = scroller ? scroller.scrollHeight : 0;
+      diagLog('info', 'scroll', 'Before batch insert', {
+        scrollerFound: !!scroller,
+        scrollerTag: scroller?.tagName,
+        scrollerClass: scroller?.className?.substring(0, 80),
+        scrollerRole: scroller?.getAttribute('role'),
+        prevScrollTop,
+        prevScrollHeight,
+        batchStart: startIndex,
+        batchEnd: endIndex
+      });
 
-    diagLog('info', 'scroll', 'Before batch insert', {
-      scrollerFound: !!scroller,
-      scrollerTag: scroller?.tagName,
-      scrollerClass: scroller?.className?.substring(0, 80),
-      scrollerRole: scroller?.getAttribute('role'),
-      prevScrollTop,
-      prevScrollHeight,
-      batchStart: startIndex,
-      batchEnd: endIndex
-    });
-
-    for (let i = startIndex; i < endIndex; i++) {
-      const button = buttons[i];
-      if (!button.hasAttribute(PROCESSED_ATTR)) {
-        button.setAttribute(PROCESSED_ATTR, 'true');
-        addTranscribeButton(button);
-        processed++;
+      for (let i = startIndex; i < endIndex; i++) {
+        const button = buttons[i];
+        if (!button.hasAttribute(PROCESSED_ATTR)) {
+          button.setAttribute(PROCESSED_ATTR, 'true');
+          addTranscribeButton(button);
+          processed++;
+        }
       }
-    }
 
-    if (processed > 0 && scroller) {
-      const newScrollHeight = scroller.scrollHeight;
-      const heightDelta = newScrollHeight - prevScrollHeight;
-      if (heightDelta > 0) {
-        scroller.scrollTop = prevScrollTop + heightDelta;
-        diagLog('info', 'scroll', 'Compensated scroll', {
-          heightDelta,
-          newScrollTop: scroller.scrollTop,
-          newScrollHeight
-        });
+      if (processed > 0 && scroller) {
+        const newScrollHeight = scroller.scrollHeight;
+        const heightDelta = newScrollHeight - prevScrollHeight;
+        if (heightDelta > 0) {
+          scroller.scrollTop = prevScrollTop + heightDelta;
+          diagLog('info', 'scroll', 'Compensated scroll', {
+            heightDelta,
+            newScrollTop: scroller.scrollTop,
+            newScrollHeight
+          });
+        }
       }
-    }
 
-    if (processed > 0) {
-      console.log(`[WhatsApp Transcriber] Processed ${processed} voice messages`);
-    }
+      if (processed > 0) {
+        console.log(`[WhatsApp Transcriber] Processed ${processed} voice messages`);
+      }
 
-    if (endIndex < buttons.length) {
-      requestAnimationFrame(() => processBatch(buttons, endIndex));
-    } else {
-      isScanning = false;
+      if (endIndex < buttons.length) {
+        requestAnimationFrame(() => processBatch(buttons, endIndex));
+        more = true;
+      }
+    } finally {
+      if (!more) isScanning = false;
     }
   }
 
@@ -702,19 +765,20 @@
       messageContainer.appendChild(btnContainer);
     }
 
-    // Arm the karaoke sync: the playback ticks arriving from the MAIN world
-    // carry no message identity, so we record which message the user started.
+    // A hint for the karaoke sync: the next audio to start is most likely this
+    // message's. attributeAudio still checks the duration before trusting it.
     // Listening on WhatsApp's own button keeps this language-independent.
-    // This same button is also the pause button, so only reset state when the
-    // user actually switches to a different message — otherwise pausing would
-    // wipe the frozen highlight.
     playButton.addEventListener('click', () => {
       lastPlayClickAt = Date.now();
-      if (activeContainer === messageContainer) return;
-      clearHighlight();
-      activeContainer = messageContainer;
-      activeWordEls = null;
-      activeWordIndex = -1;
+      lastPlayClickMsgId = msgId;
+      // Another note's button leaves the current one, even if its start never
+      // gets matched: a word click there must restart it, not seek a stale audio.
+      if (msgId !== activeMsgId) {
+        clearHighlight();
+        activeMsgId = null;
+        activeAudioId = null;
+        activeWordEls = null;
+      }
     });
 
     if (cached) {
@@ -751,8 +815,9 @@
       }
 
       if (!checkDailyLimit()) {
-        const limit = DAILY_TRANSCRIPTION_LIMIT;
+        const limit = dailyLimit();
         displayTranscription(messageContainer, `Daily limit reached (${limit}/${limit}). Come back tomorrow!`, true);
+        if (!isPro) addGetProButton(messageContainer);
         button.innerHTML = '🔒 Limit';
         button.classList.add('error');
         setTimeout(() => {
@@ -812,13 +877,21 @@
         cacheSet(msgId, result.text, result.provider || 'unknown', result.words);
         incrementDailyCounter();
 
-        const remaining = getDailyRemaining();
-        displayTranscription(messageContainer, result.text, false, ` (${remaining} free left today)`, result.words);
+        // WhatsApp may have rebuilt the message node during the request.
+        if (!messageContainer.isConnected) {
+          const liveBtn = findTranscribeBtn(msgId);
+          const live = liveBtn && getMessageContainer(liveBtn);
+          if (live) { messageContainer = live; button = liveBtn; }
+        }
+
+        // The Worker counts per licence across devices; the local count is per device.
+        const remaining = result.remaining ?? getDailyRemaining();
+        displayTranscription(messageContainer, result.text, false, ` (${remaining} left today)`, result.words);
         button.innerHTML = '✅ Transcribed';
         button.classList.remove('loading');
         button.classList.add('success');
       } else {
-        throw new Error(result.error || 'Error transcribing');
+        throw Object.assign(new Error(result.error || 'Error transcribing'), { code: result.code, pro: result.pro });
       }
 
     } catch (error) {
@@ -826,8 +899,10 @@
       button.innerHTML = '❌ Error';
       button.classList.remove('loading');
       button.classList.add('error');
-      
+
       displayTranscription(messageContainer, `Error: ${error.message}`, true);
+      // The Worker's own free cap (another device, cleared storage) lands here.
+      if (error.code === 'DAILY_LIMIT' && !error.pro) addGetProButton(messageContainer);
       
       setTimeout(() => {
         button.disabled = false;
@@ -835,6 +910,18 @@
         button.classList.remove('error');
       }, 3000);
     }
+  }
+
+  // Opens the popup page rather than the checkout link, so the URL lives only
+  // in popup.js and the user lands next to the field where the key goes.
+  function addGetProButton(messageContainer) {
+    const resultDiv = messageContainer.querySelector('.' + RESULT_CLASS);
+    if (!resultDiv || resultDiv.querySelector('.wt-get-pro-btn')) return;
+    const btn = document.createElement('button');
+    btn.className = 'wt-copy-btn wt-get-pro-btn';
+    btn.textContent = '⭐ Get Pro';
+    btn.addEventListener('click', () => chrome.runtime.sendMessage({ action: 'openPopup' }));
+    resultDiv.appendChild(btn);
   }
 
   const COLLAPSE_THRESHOLD = 200;
@@ -846,23 +933,44 @@
       resultDiv = document.createElement('div');
       resultDiv.className = RESULT_CLASS;
       messageContainer.appendChild(resultDiv);
+    } else if (isError && !resultDiv.classList.contains('error')) {
+      // A transcription is already on screen (a failed "Sync words" re-run,
+      // say). The error goes underneath, so it can't wipe the cached text.
+      let note = resultDiv.querySelector('.wt-result-error-note');
+      if (!note) {
+        note = document.createElement('div');
+        note.className = 'wt-result-error-note';
+        resultDiv.appendChild(note);
+      }
+      note.textContent = '⚠️ ' + text;
+      return;
     }
 
     resultDiv.classList.toggle('error', isError);
 
     const titleSuffix = extraInfo ? `<span class="wt-result-meta">${escapeHtml(extraInfo)}</span>` : '';
     const isLong = !isError && text.length > COLLAPSE_THRESHOLD;
-    const karaoke = isPro && !isError && words?.length > 0;
+    const karaoke = isPro && !isError && Array.isArray(words) && words.length > 0;
 
     // Karaoke needs each word individually addressable. Without timestamps
     // (free tier, or an entry cached before this feature) fall through to the
     // plain escaped text exactly as before.
     // Whisper emits words with a leading space (" algo"). The container is
     // pre-wrap, so those would render as doubled gaps — trim and rejoin.
+    // A word without a usable start borrows the previous one's: it stays in
+    // the text, nothing but a number reaches the attribute, and the ascending
+    // scan in highlightWordAt doesn't stall on a NaN.
+    let lastStart = 0;
     const body = karaoke
       ? words
-          .filter(w => w.word.trim())
-          .map(w => `<span class="wt-w" data-s="${w.start}">${escapeHtml(w.word.trim())}</span>`)
+          .map(w => [String(w?.word || '').trim(), Number(w?.start), Number(w?.end)])
+          .filter(([word]) => word)
+          .map(([word, start, end]) => {
+            if (Number.isFinite(start)) lastStart = start;
+            // The end only paces the sweep; without one it runs to the next start.
+            const e = Number.isFinite(end) && end > lastStart ? ` data-e="${end}"` : '';
+            return `<span class="wt-w" data-s="${lastStart}"${e}>${escapeHtml(word)}</span>`;
+          })
           .join(' ')
       : escapeHtml(text);
 
@@ -879,9 +987,21 @@
     if (karaoke) {
       // Click-to-seek. The <audio> lives detached in the MAIN world, so the
       // seek has to be relayed there.
+      let clickTimer = null;
       resultDiv.querySelector('.wt-result-text').addEventListener('click', (e) => {
+        // A double click selects a word to copy and must not seek. Its first
+        // click also arrives with detail 1, so wait out the double-click
+        // window before acting; the second click cancels it.
+        clearTimeout(clickTimer);
+        if (e.detail > 1) return;
         const span = e.target.closest('.wt-w');
-        if (!span) return;
+        // 500 ms is the Windows default double-click time.
+        if (span) clickTimer = setTimeout(() => seekToWord(span), 500);
+      });
+
+      const seekToWord = (span) => {
+        // A drag that selected text ends in a click too.
+        if (!window.getSelection().isCollapsed) return;
         const time = parseFloat(span.dataset.s);
 
         // Only one voice message is loaded in the player at a time. Clicking a
@@ -889,13 +1009,18 @@
         // this message first and queue the jump for when it opens. The play
         // button is found by our own processed-marker, not by aria-label, so
         // this stays language-independent.
-        if (activeContainer !== messageContainer) {
-          pendingSeekTime = time;
-          messageContainer.querySelector(`[${PROCESSED_ATTR}]`)?.click();
+        const playBtn = messageContainer.querySelector(`[${PROCESSED_ATTR}]`);
+        const msgId = playBtn && getMessageId(playBtn);
+        if (!msgId || msgId !== activeMsgId) {
+          // WhatsApp's button toggles play/pause; a second click while the
+          // first is still loading would pause it. Just move the queued jump.
+          const queued = pendingSeek?.msgId === msgId && Date.now() < pendingSeek.expiry;
+          pendingSeek = { msgId, time, expiry: Date.now() + 10000 };
+          if (!queued) playBtn?.click();
           return;
         }
-        sendSeek(time);
-      });
+        sendSeek(activeAudioId, time);
+      };
     }
 
     const toggleBtn = resultDiv.querySelector('.wt-toggle-btn');
@@ -925,13 +1050,86 @@
   // Driven by audioTick messages from injected-early.js, which owns the only
   // reference to WhatsApp's detached <audio> element.
 
-  function highlightWordAt(t) {
-    if (!activeContainer) return;
+  function findTranscribeBtn(msgId) {
+    return document.querySelector(`.${BUTTON_CLASS}[data-msg-id="${CSS.escape(msgId)}"]`);
+  }
 
-    if (activeWordEls === null) {
-      activeWordEls = activeContainer.querySelectorAll('.wt-result-text.wt-karaoke .wt-w');
+  // Which voice note just started playing. The audio carries no message
+  // identity, so match its duration against the clicked message, or — when
+  // the active one just ended, i.e. WhatsApp auto-advancing — the ones after it.
+  async function attributeAudio(d) {
+    const sinceClick = Date.now() - lastPlayClickAt;
+    const clicked = sinceClick < 10000 ? lastPlayClickMsgId : null;
+    const ids = clicked ? [clicked] : [];
+    // Same window as the click: the next note may still need downloading.
+    // A fresh click means the user picked a note; a real auto-advance has none.
+    if (!clicked && activeEndedAt && Date.now() - activeEndedAt < 10000) {
+      // ponytail: if the auto-advanced note isn't rendered either, its own
+      // next ids come back empty and the chain stops; ask injected.js for the
+      // model's next voice notes if that matters.
+      const next = nextVoiceIds(activeMsgId);
+      ids.push(...(next.length ? next : activeNextIds));
     }
-    if (!activeWordEls.length) return;
+    if (!ids.length) return null;
+
+    let durations = {};
+    if (injectedScriptReady) {
+      try {
+        durations = (await sendToInjectedScript('getDurations', { msgIds: ids })).durations || {};
+      } catch (e) { /* fall through to the DOM */ }
+    }
+    // The DOM's value is unverified, so only the model's may veto the click fallback.
+    const clickedHasModelDuration = !!(clicked && durations[clicked]);
+    for (const id of ids) {
+      if (durations[id]) continue;
+      // ponytail: unverified against a live DOM sample; units could differ
+      const btn = findTranscribeBtn(id);
+      const slider = btn && getMessageContainer(btn)?.querySelector('[aria-valuemax]');
+      const max = Number(slider?.getAttribute('aria-valuemax'));
+      if (max > 0) durations[id] = max;
+    }
+
+    // The model's duration is whole seconds, the <audio>'s is exact.
+    const match = ids.find(id => Math.abs(durations[id] - d) <= 1);
+    if (match) return match;
+    // No duration readable for the clicked message: trust a fresh click, as
+    // before duration matching, rather than lose karaoke altogether.
+    // Same 10 s as the click window: the start waits for the duration to load.
+    if (clicked && !clickedHasModelDuration) return clicked;
+    return null;
+  }
+
+  // The voice notes WhatsApp could auto-advance to after msgId: only the next
+  // one, plus a spare, so an unrelated later note can't match a stray sound.
+  function nextVoiceIds(msgId) {
+    const all = [...document.querySelectorAll('.' + BUTTON_CLASS)].map(b => b.dataset.msgId);
+    const i = all.indexOf(msgId);
+    return i >= 0 ? all.slice(i + 1, i + 3).filter(Boolean) : [];
+  }
+
+  function highlightWordAt(t) {
+    // Free users never get word spans; don't query the DOM 60 times a second for none.
+    if (!isPro || !activeMsgId) return;
+
+    // Re-find the words when unresolved or when WhatsApp replaced the node
+    // they lived in; the new spans start unlit.
+    if (activeWordEls === null || !activeWordEls[0].isConnected) {
+      const btn = findTranscribeBtn(activeMsgId);
+      const textDiv = btn && getMessageContainer(btn)?.querySelector('.wt-result-text.wt-karaoke');
+      activeWordEls = textDiv?.querySelectorAll('.wt-w');
+      activeWordIndex = -1;
+      // Never cache an empty list: the transcription may render mid-playback.
+      if (!activeWordEls?.length) {
+        activeWordEls = null;
+        return;
+      }
+      // Collapsed shows 3 lines, so the highlight would run out of sight.
+      if (textDiv.classList.contains('wt-collapsed')) {
+        textDiv.classList.remove('wt-collapsed');
+        const toggle = textDiv.parentElement.querySelector('.wt-toggle-btn');
+        if (toggle) toggle.innerHTML = '▲ Show less';
+      }
+    }
 
     const ts = t + karaokeOffsetMs / 1000;
 
@@ -942,27 +1140,48 @@
       else break;
     }
 
-    // Only touch the DOM when the active word actually changes, not every frame.
-    if (idx === activeWordIndex) return;
+    // Classes only change when the active word does, not every frame.
+    if (idx !== activeWordIndex) {
+      const prev = activeWordEls[activeWordIndex];
+      prev?.classList.remove('wt-now');
+      prev?.style.removeProperty('--wt-p');
 
-    // Everything already spoken stays lit, so the edge of the highlight is
-    // itself the playhead. Only the words that crossed the edge get touched,
-    // which keeps a seek backwards as cheap as normal playback.
-    if (idx > activeWordIndex) {
-      for (let i = activeWordIndex + 1; i <= idx; i++) activeWordEls[i]?.classList.add('wt-active');
-    } else {
-      for (let i = activeWordIndex; i > idx; i--) activeWordEls[i]?.classList.remove('wt-active');
+      // Everything already spoken stays lit, so the edge of the highlight is
+      // itself the playhead. Only the words that crossed the edge get touched,
+      // which keeps a seek backwards as cheap as normal playback.
+      if (idx > activeWordIndex) {
+        for (let i = activeWordIndex + 1; i <= idx; i++) activeWordEls[i]?.classList.add('wt-active');
+      } else {
+        for (let i = activeWordIndex; i > idx; i--) activeWordEls[i]?.classList.remove('wt-active');
+      }
+      activeWordEls[idx]?.classList.add('wt-now');
+      activeWordIndex = idx;
     }
-    activeWordIndex = idx;
+
+    // The sweep is the one style that moves inside a word, so only it pays the
+    // per-frame write.
+    const cur = activeWordEls[idx];
+    if (cur && karaokeStyle === 'sweep') {
+      const s = parseFloat(cur.dataset.s);
+      const e = parseFloat(cur.dataset.e) || parseFloat(activeWordEls[idx + 1]?.dataset.s) || s + 0.4;
+      const p = Math.min(1, Math.max(0, (ts - s) / (e - s || 0.4)));
+      cur.style.setProperty('--wt-p', (p * 100).toFixed(1) + '%');
+    }
   }
 
   function clearHighlight() {
-    activeWordEls?.forEach(el => el.classList.remove('wt-active'));
+    activeWordEls?.forEach(el => {
+      el.classList.remove('wt-active', 'wt-now');
+      el.style.removeProperty('--wt-p');
+    });
     activeWordIndex = -1;
   }
 
-  function sendSeek(time) {
-    window.postMessage({ source: 'wt-content-script', action: 'seekAudio', time }, '*');
+  function sendSeek(id, time) {
+    // The inverse of highlightWordAt's shift, so a clicked word lands where
+    // that word lights up.
+    time = Math.max(0, time - karaokeOffsetMs / 1000);
+    window.postMessage({ source: 'wt-content-script', action: 'seekAudio', id, time }, '*');
   }
 
   // The popup can flip these while the page is open; without this the user
@@ -976,6 +1195,9 @@
     }
     if (changes[KARAOKE_OFFSET_KEY]) {
       karaokeOffsetMs = Number(changes[KARAOKE_OFFSET_KEY].newValue) || 0;
+    }
+    if (changes[KARAOKE_STYLE_KEY]) {
+      applyKaraokeStyle(changes[KARAOKE_STYLE_KEY].newValue);
     }
   });
 
@@ -1521,7 +1743,7 @@
       cache: {
         entriesInMemory: transcriptionCache.size,
         dailyUsed: dailyCounter.count,
-        dailyLimit: DAILY_TRANSCRIPTION_LIMIT,
+        dailyLimit: dailyLimit(),
         dailyRemaining: getDailyRemaining(),
         dailyDate: dailyCounter.date,
         maxEntries: MAX_CACHE_ENTRIES,
